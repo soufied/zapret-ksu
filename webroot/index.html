@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>zapret KSU</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo" aria-hidden="true">Z</span><span>zapret KSU</span></div>
+    <span id="version" class="muted"></span>
+  </header>
+
+  
+  <section id="updateBanner" class="banner" hidden aria-live="polite">
+    <div class="banner-head">
+      <span class="spinner" aria-hidden="true"></span>
+      <div class="banner-text">
+        <strong id="ubTitle">Updating…</strong>
+        <div id="ubSub" class="muted"></div>
+      </div>
+    </div>
+    <div class="bar"><div class="bar-fill"></div></div>
+    <ol id="ubSteps" class="steps"></ol>
+    <div id="ubWarn" class="warn" hidden></div>
+  </section>
+
+  <main>
+    
+    <section id="tab-home" class="tab is-active">
+      <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
+      <div class="hero" id="hero" data-state="unknown">
+        <div class="hero-label">Firewall</div>
+        <div class="hero-state" id="heroState">Checking…</div>
+        <div class="hero-sub" id="heroSub"></div>
+        <button id="powerBtn" class="power" disabled>Start</button>
+      </div>
+
+      <div class="card" id="homeAuto" hidden>
+        <h2>Auto network profile</h2>
+        <dl class="kv">
+          <dt>Wi-Fi</dt><dd id="autoWifiVal">-</dd>
+          <dt>Mobile data</dt><dd id="autoMobileVal">-</dd>
+          <dt>Now</dt><dd id="autoNowVal">-</dd>
+          <dt>Watcher</dt><dd id="autoWatcherVal">-</dd>
+        </dl>
+        <p class="hint">Start turns the profile on. Stop turns it off until you press Start again.</p>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span>Engine</span><b id="engineVal">-</b></div>
+        <div class="stat"><span>Preset</span><b id="strategyVal">-</b></div>
+        <div class="stat"><span>Backend</span><b id="backendVal">-</b></div>
+        <div class="stat"><span>nfqws</span><b id="nfqwsVal">-</b></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Recent activity</h2><button class="link" data-goto="logs">Open logs</button></div>
+        <pre id="recentLog" class="log small">Loading…</pre>
+      </div>
+    </section>
+
+    
+    <section id="tab-settings" class="tab">
+      <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
+      <div class="card">
+        <h2>Startup</h2>
+        <label class="switch-row"><span>Start engine after boot</span><input id="s_AUTO_START" type="checkbox" data-bool></label>
+        <p class="hint">Starts the saved engine and strategy after boot. It ignores the auto network profile. Off by default.</p>
+      </div>
+
+      <div class="card">
+        <h2>Engine and preset</h2>
+        <label class="field">
+          <span>Engine</span>
+          <select id="s_ENGINE">
+            <option value="nfqws2">nfqws2 (presets)</option>
+            <option value="nfqws1">nfqws1 (.bat strategies)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Preset / strategy</span>
+          <select id="s_STRATEGY"><option value="">(none installed; run Update)</option></select>
+        </label>
+      </div>
+
+      <div class="card">
+        <h2>Interception</h2>
+        <label class="field">
+          <span>Firewall backend</span>
+          <select id="s_BACKEND">
+            <option value="auto">Auto</option>
+            <option value="nft">nftables</option>
+            <option value="iptables">iptables</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Network <small>(which connection to intercept)</small></span>
+          <select id="s_IFACE_SEL"></select>
+        </label>
+        <label class="field" id="ifaceCustomField" hidden>
+          <span>Interface name <small>(a trailing + matches every name starting with it)</small></span>
+          <input id="s_IFACE_CUSTOM" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. wlan0 or rmnet_data+">
+        </label>
+        <label class="field">
+          <span>Web ports (TCP)</span>
+          <input id="s_TCP_PORTS" type="text" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="switch-row"><span>QUIC (UDP 443)</span><input id="s_QUIC_ENABLED" type="checkbox" data-bool></label>
+      </div>
+
+      <div class="card" id="gfCard" hidden>
+        <h2>Game filter <small>(zapret1)</small></h2>
+        <label class="switch-row"><span>TCP ports 1024-65535</span><input id="s_GAME_FILTER_TCP" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>UDP ports 1024-65535</span><input id="s_GAME_FILTER_UDP" type="checkbox" data-bool></label>
+        <p class="hint">Fills the strategy's game-filter placeholders with the full port range. Off by default.</p>
+      </div>
+
+      <div class="card">
+        <h2>Bypass rules</h2>
+        <label class="switch-row"><span>Skip private networks</span><input id="s_BYPASS_PRIVATE" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Skip VPN tunnels</span><input id="s_BYPASS_VPN" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Conntrack accounting</span><input id="s_CONNTRACK_ACCT" type="checkbox" data-bool></label>
+      </div>
+
+      <div class="card" id="autoCard">
+        <h2>Auto network profile</h2>
+        <label class="switch-row"><span>Enable auto network profile</span><input id="s_AUTO_NETWORK" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Start the profile after boot</span><input id="s_AUTO_NETWORK_START" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Stop the engine when no connection is up</span><input id="s_AUTO_STOP_NONE" type="checkbox" data-bool></label>
+        <p class="hint">Switches engine and strategy by connection. Wi-Fi takes priority when both are up, and the engine stops when there is none. Without "Start the profile after boot", press Start once; Stop turns it off.</p>
+        <div id="autoOpts">
+          <h3>Wi-Fi</h3>
+          <label class="field"><span>Interface</span><input id="s_WIFI_IFACE" type="text" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Engine</span>
+            <select id="s_WIFI_ENGINE"><option value="nfqws2">nfqws2 (presets)</option><option value="nfqws1">nfqws1 (.bat strategies)</option></select>
+          </label>
+          <label class="field"><span>Preset / strategy</span><select id="s_WIFI_STRATEGY"></select></label>
+          <h3>Mobile data</h3>
+          <label class="field"><span>Interface pattern <small>(+ matches any name starting with the text)</small></span><input id="s_MOBILE_IFACE" type="text" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span>Engine</span>
+            <select id="s_MOBILE_ENGINE"><option value="nfqws2">nfqws2 (presets)</option><option value="nfqws1">nfqws1 (.bat strategies)</option></select>
+          </label>
+          <label class="field"><span>Preset / strategy</span><select id="s_MOBILE_STRATEGY"></select></label>
+        </div>
+      </div>
+
+      <div class="card" id="advCard">
+        <h2>Advanced</h2>
+        <label class="switch-row"><span>Back up lists before saving</span><input id="s_BACKUP_LISTS" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Write the log file</span><input id="s_LOG_ENABLED" type="checkbox" data-bool></label>
+        <div id="z1Opts" hidden>
+          <label class="field">
+            <span>ipset mode <small>(nfqws1; applies immediately)</small></span>
+            <select id="ipsetMode">
+              <option value="none">None (no IP set)</option>
+              <option value="any">Any (every address)</option>
+              <option value="loaded">Loaded (the shipped list)</option>
+              <option value="custom">Custom (your saved list)</option>
+            </select>
+          </label>
+          <label class="field"><span>Discord fake packet <small>(nfqws1)</small></span><select id="fakeDiscord"></select></label>
+          <label class="field"><span>Game fake packet <small>(nfqws1)</small></span><select id="fakeGame"></select></label>
+          <div class="actions"><button id="fakesApplyBtn" class="btn wide">Apply fake packets</button></div>
+        </div>
+        <div class="actions"><button id="openEditorBtn" class="btn primary wide">Open lists and strategy editor</button></div>
+      </div>
+
+      <p class="hint">Changes take effect when the firewall restarts. Applying restarts it automatically when it is running.</p>
+    </section>
+
+    
+    <section id="tab-blockcheck" class="tab">
+      <div class="card">
+        <h2>Blockcheck</h2>
+        <p class="hint">Finds the preset that gets your blocked domains through. Each domain is checked over HTTP, TLS 1.2, TLS 1.3 and QUIC, once with no bypass (baseline) and once per preset. Traffic is briefly interrupted while it runs. Tests the engine selected in Settings: nfqws2 presets or nfqws1 .bat strategies. Needs curl.</p>
+        <label class="field">
+          <span>Presets to test</span>
+          <select id="bcCount">
+            <option value="5">First 5</option>
+            <option value="15" selected>First 15</option>
+            <option value="0">All presets</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button id="bcStartBtn" class="btn primary wide">Start Blockcheck</button>
+          <button id="bcCancelBtn" class="btn wide" disabled>Cancel</button>
+        </div>
+      </div>
+
+      <div class="card summary" id="bcSummary" hidden>
+        <h2>Summary</h2>
+        <dl class="kv">
+          <dt>Baseline (no bypass)</dt><dd id="bcBaseline">-</dd>
+          <dt>Best strategy</dt><dd id="bcBestText">-</dd>
+          <dt>Tested</dt><dd id="bcTested">-</dd>
+        </dl>
+        <div class="actions"><button id="bcUseBestBtn" class="btn primary wide" disabled>Use best strategy</button></div>
+      </div>
+
+      <div class="card" id="bcTargetsCard" hidden>
+        <h2>Target lists (zapret2)</h2>
+        <p class="hint">Domains for the test come from the lists you tick: 3 per list, up to 12 in all. Leave everything unticked to use the built-in domains.</p>
+        <div id="bcTargets" class="check-list"></div>
+        <div class="actions">
+          <button id="bcTargetsSave" class="btn primary">Save targets</button>
+          <button id="bcTargetsClear" class="btn">Built-in domains</button>
+        </div>
+      </div>
+
+      <div class="card" id="bcProgressCard" hidden>
+        <div class="card-head"><h2>Progress</h2><span id="bcPct" class="muted">0%</span></div>
+        <div class="bar det"><div id="bcBarFill" class="bar-fill-det"></div></div>
+        <p class="hint" id="bcMsg"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Results</h2><span id="bcBest" class="muted"></span></div>
+        <p class="hint" id="bcResultsHint">Each row appears as soon as its check completes. The baseline row is the reference: no bypass.</p>
+        <div class="table-wrap">
+          <table class="results">
+            <thead><tr><th>#</th><th>Preset</th><th>Score</th><th>HTTP</th><th>TLS1.2</th><th>TLS1.3</th><th>QUIC</th><th></th></tr></thead>
+            <tbody id="bcRows"><tr><td colspan="8" class="muted">No results yet. Start Blockcheck.</td></tr></tbody>
+          </table>
+        </div>
+        <p class="hint">Score is passed probes out of the total. The baseline row shows what is blocked without any bypass. "Use" selects that strategy and its engine.</p>
+      </div>
+    </section>
+
+    
+    <section id="tab-components" class="tab">
+      <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
+      <div class="card">
+        <h2>Installed components</h2>
+        <dl class="kv">
+          <dt>nfqws1</dt><dd id="v_nfqws1">not installed</dd>
+          <dt>nfqws2</dt><dd id="v_nfqws2">not installed</dd>
+          <dt>Presets (nfqws2)</dt><dd id="v_presets">not installed</dd>
+          <dt>Strategies (nfqws1)</dt><dd id="v_strategies">not installed</dd>
+        </dl>
+        <p class="hint" id="lastUpdate">No update run yet.</p>
+      </div>
+
+      <div class="card">
+        <h2>Download and update</h2>
+        <div class="comp-grid">
+          <button id="updAllBtn" class="btn primary wide">Update all</button>
+          <button id="updNfqws2Btn" class="btn">nfqws2</button>
+          <button id="updNfqws1Btn" class="btn">nfqws1</button>
+          <button id="updPresetsBtn" class="btn">Presets</button>
+          <button id="updStrategiesBtn" class="btn">Strategies</button>
+        </div>
+        <p class="hint">Downloads come from the official zapret and zapret2 releases and the strategy repositories. The progress banner at the top shows each step, the bytes received, and the time taken. Downloads continue if you switch tabs.</p>
+      </div>
+    </section>
+
+    
+    <section id="tab-logs" class="tab">
+      <div class="log-toolbar">
+        <div class="chips" role="group" aria-label="Filter">
+          <button class="chip is-on" data-filter="all">All</button>
+          <button class="chip" data-filter="errors">Errors</button>
+          <button class="chip" data-filter="svc">Service</button>
+          <button class="chip" data-filter="ctl">Control</button>
+          <button class="chip" data-filter="fw">Firewall</button>
+          <button class="chip" data-filter="engine">Engine</button>
+          <button class="chip" data-filter="fetch">Downloads</button>
+        </div>
+        <input id="logSearch" type="search" placeholder="Search logs" autocomplete="off" spellcheck="false">
+        <div class="log-actions">
+          <label class="inline"><input id="autoScroll" type="checkbox" checked> Auto-scroll</label>
+          <button id="clearLogsBtn" class="btn">Clear logs</button>
+          <button id="copyLogsBtn" class="btn">Copy logs</button>
+        </div>
+      </div>
+      <pre id="logView" class="log">Loading…</pre>
+    </section>
+  </main>
+
+  
+  <div id="editor" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Editor">
+    <div class="ov-head">
+      <button id="edClose" class="btn small">Close</button>
+      <strong>Editor</strong>
+      <span class="muted" id="edEngine"></span>
+    </div>
+    <div class="ov-tabs" role="tablist">
+      <button class="chip is-on" data-ed="lists">Lists</button>
+      <button class="chip" data-ed="strats">Strategies</button>
+    </div>
+    <div class="ov-body">
+      <div class="ov-files">
+        <input id="edSearch" type="search" placeholder="Filter files" autocomplete="off" spellcheck="false">
+        <ul id="edFiles" class="file-list"></ul>
+        <div class="ov-file-actions">
+          <button id="edNew" class="btn small">New</button>
+          <button id="edCopy" class="btn small" disabled>Copy</button>
+          <button id="edDelete" class="btn small" disabled>Delete</button>
+          <button id="edImportBtn" class="btn small">Import</button>
+          <input id="edImportInput" class="sr-only" type="file" accept=".txt,.bat,text/plain" tabindex="-1">
+        </div>
+        <div class="import-box">
+          <span class="hint">Import from the phone: type the full path of the file. Example: /storage/emulated/0/Download/my-strategy.bat</span>
+          <div class="name-row">
+            <input id="edPathInput" type="text" autocomplete="off" spellcheck="false" placeholder="/storage/emulated/0/Download/file.bat">
+            <button id="edPathBtn" class="btn small primary">Import path</button>
+          </div>
+        </div>
+        <div class="name-row" id="edNameRow" hidden>
+          <input id="edNameInput" type="text" autocomplete="off" spellcheck="false">
+          <button id="edNameOk" class="btn small primary">OK</button>
+          <button id="edNameCancel" class="btn small">Cancel</button>
+        </div>
+      </div>
+      <div class="ov-edit">
+        <div class="ed-title" id="edTitle">Select a file</div>
+        <textarea id="edText" spellcheck="false" autocapitalize="off" autocorrect="off" disabled></textarea>
+        <div class="ed-status" id="edStatus"></div>
+        <div class="actions">
+          <button id="edRevert" class="btn" disabled>Revert</button>
+          <button id="edSave" class="btn primary" disabled>Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="savebar" id="savebar" hidden>
+    <span class="muted">Unsaved changes</span>
+    <button id="applyBtn" class="btn primary">Apply</button>
+  </div>
+
+  <nav class="bottom-nav" aria-label="Sections">
+    <button class="nav-btn is-active" data-tab="home">Home</button>
+    <button class="nav-btn" data-tab="settings">Settings</button>
+    <button class="nav-btn" data-tab="blockcheck">Blockcheck</button>
+    <button class="nav-btn" data-tab="components">Components</button>
+    <button class="nav-btn" data-tab="logs">Logs</button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

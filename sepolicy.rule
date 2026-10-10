@@ -1,0 +1,6 @@
+allow su netlink_netfilter_socket { create bind read write getattr setopt }
+allow su netlink_route_socket { create bind read write getattr setopt nlmsg_write }
+allow su rawip_socket { create setopt bind read write getattr ioctl }
+allow su self rawip_socket { create setopt bind read write getattr ioctl }
+allow su self packet_socket { create bind read write getattr setopt ioctl }
+allow su self capability { net_admin net_raw }

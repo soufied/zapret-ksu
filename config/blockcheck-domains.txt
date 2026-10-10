@@ -1,0 +1,4 @@
+discord.com
+cdn.discordapp.com
+youtube.com
+googlevideo.com
