@@ -17,7 +17,7 @@ The engines, presets and strategies come from these projects. This module packag
 
 ## Requirements
 
-- An arm64 phone with **KernelSU** or **KernelSU-Next**, and root granted to the module manager. Magisk and APatch are untested.
+- An arm64 phone with **KernelSU** or **KernelSU-Next**, and root granted to the KsuWebUI. Magisk and APatch are untested.
 - Internet access for the first download (Update components).
 - Recommended: `curl` on the phone. Blockcheck needs it, and the downloader uses it to check HTTPS certificates. Without it, downloads still work but are not certificate-checked.
 
