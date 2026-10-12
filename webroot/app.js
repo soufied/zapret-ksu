@@ -1558,7 +1558,8 @@
     const btn = $("dohToggleBtn");
     if (running) {
       const queries = Number(v.doh_queries || 0).toLocaleString();
-      setText("dohNow", `on · ${count} provider${count === 1 ? "" : "s"} · ${queries} DNS queries`);
+      const errs = Number(v.doh_errors || 0);
+      setText("dohNow", `on · ${count} provider${count === 1 ? "" : "s"} · ${queries} DNS queries${errs ? ` · ${errs} recent errors` : ""}`);
       btn.textContent = "Stop DoH proxy";
       btn.classList.remove("primary");
     } else {

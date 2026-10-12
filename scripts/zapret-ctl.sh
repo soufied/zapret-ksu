@@ -1310,7 +1310,7 @@ stamp = '$stamp'
         echo "lb_estimator = true"
         echo "cache = true"
         echo "timeout = 5000"
-        echo "log_level = 2"
+        echo "log_level = 1"
         echo "use_syslog = false"
         echo ""
         printf '%s' "$statics"
@@ -1320,11 +1320,48 @@ stamp = '$stamp'
 doh_start_proxy() {
     doh_render_toml "$1" "$2" || return 2
     : > "$DOH_LOG"
-    nohup "$DOH_BIN" -config "$DOH_TOML" >>"$DOH_LOG" 2>&1 </dev/null &
+    SSL_CERT_DIR=/system/etc/security/cacerts:/apex/com.android.conscrypt/cacerts \
+        nohup "$DOH_BIN" -config "$DOH_TOML" >>"$DOH_LOG" 2>&1 </dev/null &
     pid=$!
     echo "$pid" > "$DOH_PID"
     sleep 2
     kill -0 "$pid" 2>/dev/null
+}
+
+doh_wait_ready() {
+    n=0
+    while [ "$n" -lt 20 ]; do
+        doh_running || return 1
+        if grep -Eqi 'is ready|lowest initial latency|live servers: [1-9]' "$DOH_LOG" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        n=$((n + 1))
+    done
+    return 1
+}
+
+doh_save_private_dns() {
+    mkrun
+    {
+        echo "mode=$(settings get global private_dns_mode 2>/dev/null)"
+        echo "host=$(settings get global private_dns_specifier 2>/dev/null)"
+    } > "$RUN_DIR/doh-prev-dns"
+}
+
+doh_restore_private_dns() {
+    [ -f "$RUN_DIR/doh-prev-dns" ] || return 0
+    mode=$(sed -n 's/^mode=//p' "$RUN_DIR/doh-prev-dns")
+    host=$(sed -n 's/^host=//p' "$RUN_DIR/doh-prev-dns")
+    if [ "$mode" = hostname ] && [ -n "$host" ] && [ "$host" != null ]; then
+        settings put global private_dns_specifier "$host" >/dev/null 2>&1
+        settings put global private_dns_mode hostname >/dev/null 2>&1
+    else
+        case "$mode" in ""|null) mode=automatic ;; esac
+        settings put global private_dns_mode "$mode" >/dev/null 2>&1
+    fi
+    rm -f "$RUN_DIR/doh-prev-dns"
+    mlog ctl INFO "Private DNS restored to ${mode}"
 }
 
 cmd_doh_start() {
@@ -1344,15 +1381,22 @@ cmd_doh_start() {
             die "dnscrypt-proxy exited at startup; see the Logs tab (filter Control)"
         fi
     fi
+    if ! doh_wait_ready; then
+        tail -n 5 "$DOH_LOG" 2>/dev/null | while read -r l; do mlog ctl ERROR "dnscrypt-proxy: $l"; done
+        doh_stop_proc
+        die "DoH proxy has no working upstream (TLS or network); DNS was not changed. See Logs → Control"
+    fi
     if ! doh_rules_add; then
         doh_stop_proc
         doh_rules_remove
         die "could not redirect DNS on this kernel (nat/REDIRECT unavailable)"
     fi
     if [ "$(settings get global private_dns_mode 2>/dev/null)" != off ]; then
+        doh_save_private_dns
         settings put global private_dns_mode off >/dev/null 2>&1
         mlog ctl INFO "Private DNS turned off so DNS goes through the DoH proxy"
     fi
+    doh_publish_ips "$providers"
     nohup sh "$MODDIR/scripts/zapret-ctl.sh" doh-watch >/dev/null 2>&1 </dev/null &
     echo "$!" > "$DOH_WATCH_PID"
     cmd_set DOH_ENABLED 1 >/dev/null
@@ -1360,9 +1404,29 @@ cmd_doh_start() {
     echo "DoH proxy running on 127.0.0.1:$DOH_PORT"
 }
 
+doh_publish_ips() {
+    mkrun
+    : > "$RUN_DIR/doh-ips.txt"
+    for id in $1; do
+        awk -F'|' -v i="$id" '$1==i {print $6; exit}' "$DOH_STAMPS" 2>/dev/null >> "$RUN_DIR/doh-ips.txt"
+    done
+    if sh "$FW" status >/dev/null 2>&1; then
+        sh "$FW" restart >/dev/null 2>&1
+    fi
+}
+
+doh_forget_ips() {
+    rm -f "$RUN_DIR/doh-ips.txt"
+    if sh "$FW" status >/dev/null 2>&1; then
+        sh "$FW" restart >/dev/null 2>&1
+    fi
+}
+
 cmd_doh_stop() {
     doh_stop_proc
     doh_rules_remove
+    doh_forget_ips
+    doh_restore_private_dns
     cmd_set DOH_ENABLED 0 >/dev/null 2>&1
     mlog ctl INFO "DoH proxy stopped; DNS redirect removed"
     echo "DoH proxy stopped"
@@ -1376,6 +1440,8 @@ cmd_doh_watch() {
         if ! doh_running; then
             mlog ctl ERROR "DoH proxy stopped unexpectedly; DNS redirect removed so DNS keeps working"
             doh_rules_remove
+            doh_forget_ips
+            doh_restore_private_dns
             rm -f "$DOH_PID" "$DOH_WATCH_PID"
             cmd_set DOH_ENABLED 0 >/dev/null 2>&1
             exit 0
@@ -1394,6 +1460,7 @@ cmd_doh_status() {
     echo "doh_version=$(cat "$RUN_DIR/dnscrypt.version" 2>/dev/null)"
     echo "doh_port=$DOH_PORT"
     echo "doh_ipv6=$(doh_v6_loopback && echo 1 || echo 0)"
+    echo "doh_errors=$(tail -n 300 "$DOH_LOG" 2>/dev/null | grep -ci 'error\|timeout\|refused\|failed')"
 }
 
 dns_doh() {

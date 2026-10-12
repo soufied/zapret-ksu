@@ -6,7 +6,7 @@ Primary target: KernelSU and KernelSU-Next (arm64). Magisk and APatch are suppor
 
 ## Install
 
-1. Flash `zapret-ksu-v1.1.1.zip` in the KernelSU manager and reboot.
+1. Flash `zapret-ksu-v1.1.2.zip` in the KernelSU manager and reboot.
 2. Open the WebUI, go to **Components** and tap **Update all**. This downloads nfqws, nfqws2, the zapret 2 presets, the zapret 1 strategies and dnscrypt-proxy.
 3. In **Settings → Engine and preset**, choose an engine and a preset or strategy.
 4. Tap **Start** on the **Home** tab.

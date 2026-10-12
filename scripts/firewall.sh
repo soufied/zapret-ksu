@@ -14,6 +14,9 @@ NETS4_CSV="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,127.0.0.0/8"
 NETS6_CSV="fc00::/7,fe80::/10,::1/128"
 NETS4_SP=$(echo "$NETS4_CSV" | tr ',' ' ')
 NETS6_SP=$(echo "$NETS6_CSV" | tr ',' ' ')
+DOH_IPS_FILE="$RUN_DIR/doh-ips.txt"
+DOH4=""
+DOH6=""
 
 BACKEND="auto"
 IFACE="any"
@@ -182,6 +185,8 @@ nft_build() {
             echo "    ip daddr { $NETS4_CSV } return"
             echo "    ip6 daddr { $NETS6_CSV } return"
         fi
+        [ -n "$DOH4" ] && echo "    ip daddr { $(echo $DOH4 | sed 's/ /, /g') } return"
+        [ -n "$DOH6" ] && echo "    ip6 daddr { $(echo $DOH6 | sed 's/ /, /g') } return"
         echo "    meta mark & $FWMARK == $FWMARK return"
         if [ "$APP_MODE" = exclude ] && [ -n "$UIDSET" ]; then
             echo "    meta skuid { $UIDSET } return"
@@ -202,6 +207,8 @@ nft_build() {
             echo "    ip saddr { $NETS4_CSV } return"
             echo "    ip6 saddr { $NETS6_CSV } return"
         fi
+        [ -n "$DOH4" ] && echo "    ip saddr { $(echo $DOH4 | sed 's/ /, /g') } return"
+        [ -n "$DOH6" ] && echo "    ip6 saddr { $(echo $DOH6 | sed 's/ /, /g') } return"
         echo "    meta mark & $FWMARK == $FWMARK return"
         if [ "$APP_NOQUEUE" != 1 ] && [ -n "$TCP_EFF" ]; then
             echo "    ${IFI}tcp sport { $(nft_set "$TCP_EFF") } ct reply packets 1-3 queue num $QNUM bypass"
@@ -304,6 +311,9 @@ ipt_family() {
             $T -A "$IPT_POST" -d "$n" -j RETURN || return 1
         done
     fi
+    for a in $DOH4; do
+        $T -A "$IPT_POST" -d "$a" -j RETURN || return 1
+    done
     $T -A "$IPT_POST" -m mark --mark "$FWMARK/$FWMARK" -j RETURN || return 1
     if [ "$APP_MODE" = exclude ]; then
         for u in $APP_UIDS; do
@@ -328,6 +338,9 @@ ipt_family() {
             $T -A "$IPT_PRE" -s "$n" -j RETURN || return 1
         done
     fi
+    for a in $DOH4; do
+        $T -A "$IPT_PRE" -s "$a" -j RETURN || return 1
+    done
     $T -A "$IPT_PRE" -m mark --mark "$FWMARK/$FWMARK" -j RETURN || return 1
 
     INIF=""
@@ -390,9 +403,24 @@ write_state() {
     } > "$STATE_FILE"
 }
 
+load_doh_ips() {
+    DOH4=""
+    DOH6=""
+    [ -f "$DOH_IPS_FILE" ] || return 0
+    while read -r a; do
+        case "$a" in
+            *:*) DOH6="$DOH6 $a" ;;
+            *.*) DOH4="$DOH4 $a" ;;
+        esac
+    done < "$DOH_IPS_FILE"
+    DOH4=$(echo $DOH4)
+    DOH6=$(echo $DOH6)
+}
+
 cmd_start() {
     load_conf
     validate
+    load_doh_ips
     compute_ports
     resolve_apps
     pick_backend
