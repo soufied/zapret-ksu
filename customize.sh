@@ -1,6 +1,5 @@
 #!/system/bin/sh
-
-ui_print "- Zapret DPI bypass installer"
+ui_print "- zapret DPI bypass installer"
 
 if [ "${KSU:-false}" = "true" ]; then
     ROOT_MANAGER="KernelSU"
@@ -46,11 +45,30 @@ if [ -d "$OLD" ]; then
         fi
     done
     mkdir -p "$MODPATH/run"
-    for f in nfqws1.version nfqws2.version presets.version; do
+    for f in nfqws1.version nfqws2.version presets.version dnscrypt.version strategies.version; do
         [ -f "$OLD/run/$f" ] && cp -f "$OLD/run/$f" "$MODPATH/run/$f"
     done
     [ -f "$OLD/config/blockcheck-lists.txt" ] && cp -f "$OLD/config/blockcheck-lists.txt" "$MODPATH/config/"
     [ -f "$OLD/zapret.log" ] && cp -f "$OLD/zapret.log" "$MODPATH/zapret.log"
+fi
+
+PERSIST=/data/adb/zapret-ksu-data
+if [ -d "$PERSIST" ]; then
+    ui_print "- Restoring saved engines, presets, strategies and DNS proxy"
+    mkdir -p "$MODPATH/bin" "$MODPATH/run"
+    for f in "$PERSIST"/bin/*; do
+        [ -f "$f" ] || continue
+        b=$(basename "$f")
+        [ -f "$MODPATH/bin/$b" ] || cp -f "$f" "$MODPATH/bin/$b"
+    done
+    for d in zapret1 zapret2; do
+        [ -d "$PERSIST/$d" ] && [ ! -d "$MODPATH/$d" ] && cp -rf "$PERSIST/$d" "$MODPATH/$d"
+    done
+    for f in "$PERSIST"/run/*.version; do
+        [ -f "$f" ] || continue
+        b=$(basename "$f")
+        [ -f "$MODPATH/run/$b" ] || cp -f "$f" "$MODPATH/run/$b"
+    done
 fi
 
 ui_print "- Setting permissions"

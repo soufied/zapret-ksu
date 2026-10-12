@@ -1,31 +1,35 @@
-
 (() => {
   "use strict";
 
   const CTL = "/data/adb/modules/zapret-ksu/scripts/zapret-ctl.sh";
   const MARK_UPDATE = "\n---UPDATE---\n";
   const MARK_LOG = "\n---LOG---\n";
-  const POLL_IDLE_MS = 5000;   
-  const POLL_LOGS_MS = 3000;   
-  const POLL_UPDATE_MS = 1500; 
+  const POLL_IDLE_MS = 5000;
+  const POLL_LOGS_MS = 3000;
+  const POLL_UPDATE_MS = 1500;
   const LOG_LINES = 300;
   const COPY_LINES = 1000;
 
-  const BOOL_KEYS = ["AUTO_NETWORK", "AUTO_NETWORK_START", "AUTO_STOP_NONE", "AUTO_START", "BACKUP_LISTS", "LOG_ENABLED", "GAME_FILTER_TCP", "GAME_FILTER_UDP", "QUIC_ENABLED", "BYPASS_PRIVATE", "BYPASS_VPN", "CONNTRACK_ACCT"];
+  const BOOL_KEYS = ["DOH_AUTO_START", "AUTO_NETWORK", "AUTO_NETWORK_START", "AUTO_STOP_NONE", "AUTO_START", "BACKUP_LISTS", "LOG_ENABLED", "GAME_FILTER_TCP", "GAME_FILTER_UDP", "QUIC_ENABLED", "BYPASS_PRIVATE", "BYPASS_VPN", "CONNTRACK_ACCT"];
   const AUTO_STRAT_KEYS = ["WIFI_STRATEGY", "MOBILE_STRATEGY"];
   const isStrategyKey = (k) => k === "STRATEGY" || AUTO_STRAT_KEYS.includes(k);
-  const TEXT_KEYS = ["TCP_PORTS", "WIFI_IFACE", "MOBILE_IFACE"];
-  const SELECT_KEYS = ["BACKEND", "ENGINE", "WIFI_ENGINE", "MOBILE_ENGINE"];
+  const TEXT_KEYS = ["TCP_PORTS", "UDP_PORTS", "WIFI_IFACE", "MOBILE_IFACE"];
+  const SELECT_KEYS = ["BACKEND", "ENGINE", "APP_MODE", "WIFI_ENGINE", "MOBILE_ENGINE"];
   const VALID_TEXT = /^[A-Za-z0-9,._+-]*$/;
   const STEP_ORDER = { all: ["nfqws1", "nfqws2", "presets", "strategies"] };
 
-  const $ = (id) => document.getElementById(id);
+  const elCache = new Map();
+  const $ = (id) => {
+    let el = elCache.get(id);
+    if (!el) { el = document.getElementById(id); if (el) elCache.set(id, el); }
+    return el;
+  };
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   const S = {
     tab: "home",
-    status: null,          
-    update: null,          
+    status: null,
+    update: null,
     logText: "",
     logRendered: null,
     logFilter: "all",
@@ -36,7 +40,6 @@
     busyApply: false,
     lastUpdateState: null,
   };
-
 
   let cbSeq = 0;
   function exec(cmd) {
@@ -101,9 +104,9 @@
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
-
   let toastTimer = null;
   function toast(msg, ms = 3200) {
+    if (!msg || !String(msg).trim()) return;
     const el = $("toast");
     el.textContent = msg;
     el.classList.add("show");
@@ -147,6 +150,10 @@
     setText("engineVal", s.active_engine || "-");
     setText("strategyVal", s.active_strategy || "-");
     setText("backendVal", s.firewall_backend || "none");
+    const dnsTxt = s.doh_running === "1"
+      ? `DoH · ${s.doh_count || 0} provider${s.doh_count === "1" ? "" : "s"}`
+      : s.dns_mode === "hostname" ? `DoT · ${s.dns_host || "?"}` : "Off (system DNS)";
+    setText("dnsHomeVal", dnsTxt);
     setText("nfqwsVal", s.nfqws_running === "1" ? "running" : "not running");
     $("homeAuto").hidden = !auto;
     if (auto) {
@@ -159,6 +166,7 @@
     setText("version", s.module_version ? `v${s.module_version}` : "");
     setText("v_nfqws1", s.nfqws1_version || "not installed");
     setText("v_nfqws2", s.nfqws2_version || "not installed");
+    setText("v_dnscrypt", s.dnscrypt_version || "not installed");
     const presetsN = Number(s.presets_count) || 0;
     const stratsN = Number(s.strategies_count) || 0;
     setText("v_presets", presetsN ? `${presetsN} installed${s.presets_version ? `, updated ${s.presets_version}` : ""}` : "none installed");
@@ -330,7 +338,6 @@
     if (selected && names.includes(selected)) sel.value = selected;
   }
 
-
   const LOCKED_TABS = ["home", "settings", "components"];
 
   function applyLock(running) {
@@ -386,7 +393,7 @@
     tbody.innerHTML = "";
     if (rows.length === 0) {
       const tr = document.createElement("tr");
-      tr.innerHTML = '<td colspan="8" class="muted">No results yet. Start Blockcheck.</td>';
+      tr.innerHTML = '<td colspan="9" class="muted">No results yet. Start Blockcheck.</td>';
       tbody.appendChild(tr);
       setText("bcBest", "");
       return;
@@ -394,7 +401,7 @@
     let rank = 0;
     let bestName = "";
     for (const line of rows) {
-      const [name, score, max, http, tls12, tls13, quic, note] = line.split("|");
+      const [name, score, max, http, tls12, tls13, quic, avg, note] = line.split("|");
       const isBase = name === "__baseline__";
       const tr = document.createElement("tr");
       if (isBase) tr.className = "base";
@@ -415,6 +422,7 @@
       tr.appendChild(cell(`${tls12}`));
       tr.appendChild(cell(`${tls13}`));
       tr.appendChild(cell(`${quic}`));
+      tr.appendChild(cell(isBase || avg === "0" || !avg ? "-" : `${avg}`));
       const td = document.createElement("td");
       if (!isBase && note === "") {
         const btn = document.createElement("button");
@@ -430,6 +438,288 @@
       tbody.appendChild(tr);
     }
     setText("bcBest", bestName ? `best: ${bestName}` : "");
+  }
+
+  async function loadAppCount() {
+    const n = (S.saved.APP_LIST || "").split(",").filter(Boolean).length;
+    setText("appsSelected", String(n));
+  }
+
+  // ---- App picker ----
+  // Virtual list: only the rows in view exist in the DOM, rows are reused while scrolling,
+  // and the selection lives in a Set, so the list stays smooth with hundreds of apps.
+  const APP_ROW_H = 60;
+  const APP_OVERSCAN = 6;
+  const appsAll = [];           // every app from the backend, sorted by label
+  let appsShown = [];           // after search and the system-app filter
+  const appsPicked = new Set(); // package names selected (across all apps, not just shown)
+  const appsPool = [];          // reusable row elements
+  let appsRaf = 0;
+  let appsRenderedFirst = -1;
+  let appsRenderedLast = -1;
+
+  const iconCache = new Map();  // pkg -> data URL ("" when the app has no usable icon)
+  const iconQueue = [];
+  const iconPending = new Set();
+  let iconActive = 0;
+
+  function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
+    };
+  }
+
+  async function loadAppCount() {
+    const n = (S.saved.APP_LIST || "").split(",").filter(Boolean).length;
+    setText("appsSelected", String(n));
+  }
+
+  async function loadApps() {
+    const r = await ctl("apps-list");
+    if (r.errno !== 0) {
+      toast((r.stderr || r.stdout).trim() || "Could not read the app list", 6000);
+      return false;
+    }
+    appsAll.length = 0;
+    for (const line of r.stdout.split("\n")) {
+      const parts = line.trim().split("|");
+      if (parts.length < 2 || !parts[0]) continue;
+      const [pkg, uid, label, type] = parts;
+      appsAll.push({ pkg, uid, label: label || pkg, sys: type === "s", hay: `${label} ${pkg}`.toLowerCase() });
+    }
+    appsAll.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+    return true;
+  }
+
+  // Start from the saved selection. Entries saved as UIDs become package names;
+  // entries that match no installed app are kept so saving never drops them.
+  function initPicked() {
+    appsPicked.clear();
+    const byUid = new Map(appsAll.map((a) => [a.uid, a.pkg]));
+    const known = new Set(appsAll.map((a) => a.pkg));
+    for (const e of (S.saved.APP_LIST || "").split(",").filter(Boolean)) {
+      if (known.has(e)) appsPicked.add(e);
+      else if (byUid.has(e)) appsPicked.add(byUid.get(e));
+      else appsPicked.add(e);
+    }
+  }
+
+  function showAppsOverlay() {
+    initPicked();
+    $("appsOverlay").hidden = false;
+    $("appsSearch").value = "";
+    $("appsShowSystem").checked = false;   // system apps are hidden by default
+    $("appsList").scrollTop = 0;
+    appsApplyFilter();
+  }
+
+  async function appsOpen() {
+    const had = appsAll.length > 0;
+    if (had) showAppsOverlay();              // instant: reuse the list already in memory
+    else { $("appsOverlay").hidden = false; setText("appsCount", "Loading…"); }
+    const ok = await loadApps();
+    if (!ok) { if (!had) $("appsOverlay").hidden = true; return; }
+    if (!had) showAppsOverlay();
+    else if (!$("appsOverlay").hidden) appsApplyFilter();
+  }
+
+  function appsApplyFilter() {
+    const q = $("appsSearch").value.trim().toLowerCase();
+    const showSystem = $("appsShowSystem").checked;
+    appsShown = appsAll.filter((a) => (showSystem || !a.sys) && (!q || a.hay.includes(q)));
+    $("appsSpacer").style.height = `${appsShown.length * APP_ROW_H}px`;
+    appsRenderedFirst = -1;
+    appsRenderedLast = -1;
+    appsUpdateCounts();
+    renderAppsWindow();
+  }
+
+  function appsUpdateCounts() {
+    setText("appsCount", `${appsShown.length} shown`);
+    setText("appsPicked", `${appsPicked.size} selected`);
+  }
+
+  function makeAppRow() {
+    const row = document.createElement("label");
+    row.className = "app-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    const ic = document.createElement("span");
+    ic.className = "app-ic-wrap";
+    const img = document.createElement("img");
+    img.className = "app-ic";
+    img.alt = "";
+    img.hidden = true;
+    const ph = document.createElement("span");
+    ph.className = "app-ic ph";
+    const name = document.createElement("span");
+    name.className = "app-name";
+    const title = document.createElement("span");
+    title.className = "app-title";
+    const sub = document.createElement("span");
+    sub.className = "app-uid";
+    name.append(title, sub);
+    ic.append(img, ph);
+    row.append(cb, ic, name);
+    row._cb = cb; row._img = img; row._ph = ph; row._title = title; row._sub = sub;
+    return row;
+  }
+
+  function fillAppRow(row, a) {
+    row._app = a;
+    row.dataset.pkg = a.pkg;
+    row._cb.checked = appsPicked.has(a.pkg);
+    row._title.textContent = a.label;
+    row._sub.textContent = `${a.pkg} · uid ${a.uid}`;
+    const url = iconCache.get(a.pkg);
+    if (url) {
+      if (row._img.dataset.src !== url) { row._img.src = url; row._img.dataset.src = url; }
+      row._img.hidden = false;
+      row._ph.hidden = true;
+    } else {
+      row._img.hidden = true;
+      row._ph.hidden = false;
+      row._ph.textContent = (a.pkg.split(".").pop() || "?").charAt(0).toUpperCase();
+    }
+  }
+
+  function renderAppsWindow() {
+    const list = $("appsList");
+    const n = appsShown.length;
+    const first = Math.max(0, Math.floor(list.scrollTop / APP_ROW_H) - APP_OVERSCAN);
+    const last = Math.min(n, Math.ceil((list.scrollTop + list.clientHeight) / APP_ROW_H) + APP_OVERSCAN);
+    if (first === appsRenderedFirst && last === appsRenderedLast) return;
+    appsRenderedFirst = first;
+    appsRenderedLast = last;
+    const win = $("appsWin");
+    win.style.transform = `translateY(${first * APP_ROW_H}px)`;
+    const count = Math.max(0, last - first);
+    while (appsPool.length < count) {
+      const row = makeAppRow();
+      appsPool.push(row);
+    }
+    // Fill exactly `count` pooled rows and attach them in order.
+    for (let i = 0; i < count; i++) fillAppRow(appsPool[i], appsShown[first + i]);
+    win.replaceChildren(...appsPool.slice(0, count));
+    queueVisibleIcons(first, last);
+  }
+  // Icons load only for rows in view, in batches of up to 8 per call, one call at a time.
+  // The queue is rebuilt on every scroll, so work for rows that scrolled away never piles up.
+  const ICON_BATCH = 8;
+  let iconInFlight = false;
+
+  function queueVisibleIcons(first, last) {
+    iconQueue.length = 0;
+    for (let i = first; i < last; i++) {
+      const a = appsShown[i];
+      if (a && !iconCache.has(a.pkg) && !iconPending.has(a.pkg)) iconQueue.push(a.pkg);
+    }
+    pumpIcons();
+  }
+
+  function pumpIcons() {
+    if (iconInFlight) return;
+    const batch = [];
+    while (batch.length < ICON_BATCH && iconQueue.length) {
+      const pkg = iconQueue.shift();
+      if (iconCache.has(pkg) || iconPending.has(pkg)) continue;
+      batch.push(pkg);
+      iconPending.add(pkg);
+    }
+    if (!batch.length) return;
+    iconInFlight = true;
+    ctl(`apps-icons ${batch.join(" ")}`).then((r) => {
+      iconInFlight = false;
+      const got = new Map();
+      if (r.errno === 0) {
+        for (const line of r.stdout.split("\n")) {
+          const bar = line.indexOf("|");
+          if (bar <= 0) continue;
+          const pkg = line.slice(0, bar);
+          const rest = line.slice(bar + 1);
+          const sp = rest.indexOf(" ");
+          if (sp > 0) got.set(pkg, `data:image/${rest.slice(0, sp)};base64,${rest.slice(sp + 1)}`);
+        }
+      }
+      for (const pkg of batch) {
+        iconPending.delete(pkg);
+        // A failed call is not cached, so the icons are retried later.
+        if (r.errno === 0) iconCache.set(pkg, got.get(pkg) || "");
+      }
+      if (r.errno === 0) {
+        for (const row of appsPool) {
+          if (row.isConnected && row._app && batch.includes(row._app.pkg)) fillAppRow(row, row._app);
+        }
+      }
+      pumpIcons();
+    });
+  }
+
+  function appsSetPicked(pkg, on) {
+    if (on) appsPicked.add(pkg); else appsPicked.delete(pkg);
+  }
+
+  async function appsSave() {
+    const final = [...appsPicked].join(",");
+    const r = await ctl(`set APP_LIST ${final}`);
+    if (r.errno !== 0) {
+      toast((r.stderr || r.stdout).trim(), 6000);
+      return;
+    }
+    S.saved.APP_LIST = final;
+    $("appsOverlay").hidden = true;
+    await loadAppCount();
+    toast(`${appsPicked.size} app(s) selected. Restart the firewall to apply.`, 4000);
+  }
+
+  async function checkLatest() {
+    const btn = $("checkLatestBtn");
+    btn.disabled = true;
+    try {
+      const r = await ctl("latest-versions");
+      const v = parseKV(r.stdout);
+      const box = $("latestBox");
+      box.innerHTML = "";
+      const rows = [
+        ["nfqws1 (zapret 1)", v.installed_nfqws1, v.latest_nfqws1],
+        ["nfqws2 (zapret 2)", v.installed_nfqws2, v.latest_nfqws2],
+        ["Strategies (commit)", v.installed_strategies, v.latest_strategies],
+      ];
+      for (const [name, inst, latest] of rows) {
+        const row = document.createElement("div");
+        row.className = "res-row";
+        const known = latest && latest !== "unknown";
+        const upToDate = known && inst === latest;
+        const left = document.createElement("span");
+        left.textContent = name;
+        const right = document.createElement("span");
+        right.textContent = !known ? "latest unknown (offline?)"
+          : upToDate ? `${latest} · up to date`
+          : `${latest} · update (installed ${inst || "none"})`;
+        row.append(left, right);
+        box.appendChild(row);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function backupExport() {
+    const r = await ctl("backup-export");
+    toast(r.errno === 0 ? r.stdout.trim().split("\n")[0] : (r.stderr || r.stdout).trim(), 6000);
+  }
+
+  async function backupImport() {
+    const p = $("backupPath").value.trim();
+    if (!p) {
+      toast("Type the full path of the backup file", 4000);
+      return;
+    }
+    const r = await ctl(`backup-import ${quote(p)}`);
+    toast(r.errno === 0 ? r.stdout.trim().split("\n")[0] : (r.stderr || r.stdout).trim(), 6000);
+    if (r.errno === 0) await loadSettingsFromDevice();
   }
 
   async function startBlockcheck() {
@@ -466,8 +756,6 @@
     await refresh();
   }
 
-
-
   const engineInForm = () => $("s_ENGINE").value || (S.saved.ENGINE || "nfqws2");
 
   function syncEngineSections() {
@@ -502,7 +790,6 @@
     toast(d.errno === 0 && g.errno === 0 ? "Fake packets replaced. Restart the firewall to use them."
           : (d.stderr || d.stdout || g.stderr || g.stdout).trim(), 5000);
   }
-
 
   const ED = { tab: "lists", file: "", original: "", busy: false, files: [] };
   const EDITOR_TIMEOUT_MS = 20000;
@@ -831,7 +1118,6 @@
     });
   }
 
-
   async function loadTargets() {
     const [avail, sel] = await Promise.all([ctl("bc-available"), ctl("bc-lists show")]);
     const names = avail.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -867,10 +1153,15 @@
     await loadTargets();
   }
 
-
+  function modalOpen() {
+    return !$("appsOverlay").hidden || !$("editor").hidden;
+  }
 
   async function refresh() {
     if (S.inFlight || document.hidden) return;
+    // Heavy status polling competes with the app picker and icon loads: pause it while a
+    // full-screen overlay is open and check again later.
+    if (modalOpen()) { schedule(); return; }
     S.inFlight = true;
     try {
       const logLines = S.tab === "logs" ? LOG_LINES : 40;
@@ -928,7 +1219,6 @@
     }
   });
 
-
   async function togglePower() {
     if (!S.status || S.status.firewall_active === undefined) return;
     const active = S.status.firewall_active === "1";
@@ -972,6 +1262,7 @@
         }
       }
       S.saved = { ...S.saved, ...values };
+      renderSettingsMenu();
       if (S.status && S.status.firewall_active === "1") {
         toast("Saved. Restarting firewall…", 5000);
         const r = await ctl("restart");
@@ -995,6 +1286,8 @@
     const values = parseKV(r.stdout);
     S.saved = values;
     renderSettings(values);
+    await loadAppCount();
+    renderSettingsMenu();
     await loadInterfaces(values.IFACE || "any");
     await loadStrategies(values.ENGINE || "nfqws2", values.STRATEGY || "");
     syncEngineSections();
@@ -1084,7 +1377,6 @@
     toast(ok ? "Logs copied to clipboard" : "Copy failed");
   }
 
-
   $("powerBtn").addEventListener("click", togglePower);
   $("applyBtn").addEventListener("click", applySettings);
   $("copyLogsBtn").addEventListener("click", copyLogs);
@@ -1106,6 +1398,34 @@
   }
 
   $("bcStartBtn").addEventListener("click", startBlockcheck);
+  $("appsBtn").addEventListener("click", appsOpen);
+  $("appsClose").addEventListener("click", () => { $("appsOverlay").hidden = true; });
+  $("appsSearch").addEventListener("input", debounce(appsApplyFilter, 120));
+  $("appsShowSystem").addEventListener("change", appsApplyFilter);
+  $("appsAll").addEventListener("click", () => {
+    for (const a of appsShown) appsPicked.add(a.pkg);
+    renderAppsWindow();
+    appsUpdateCounts();
+  });
+  $("appsNone").addEventListener("click", () => {
+    appsPicked.clear();
+    renderAppsWindow();
+    appsUpdateCounts();
+  });
+  $("appsList").addEventListener("change", (e) => {
+    const row = e.target.closest && e.target.closest(".app-row");
+    if (!row || !e.target.matches("input[type=checkbox]")) return;
+    appsSetPicked(row.dataset.pkg, e.target.checked);
+    appsUpdateCounts();
+  });
+  $("appsList").addEventListener("scroll", () => {
+    if (appsRaf) return;
+    appsRaf = requestAnimationFrame(() => { appsRaf = 0; renderAppsWindow(); });
+  }, { passive: true });
+  $("appsSave").addEventListener("click", appsSave);
+  $("checkLatestBtn").addEventListener("click", checkLatest);
+  $("backupExportBtn").addEventListener("click", backupExport);
+  $("backupImportBtn").addEventListener("click", backupImport);
   $("bcTargetsSave").addEventListener("click", saveTargets);
   $("bcTargetsClear").addEventListener("click", clearTargets);
   $("ipsetMode").addEventListener("change", setIpsetMode);
@@ -1155,4 +1475,199 @@
     await loadSettingsFromDevice();
     await refresh();
   })();
+  const SETTINGS_TITLES = {
+    engine: "Engine and preset",
+    network: "Interception and bypass",
+    auto: "Startup and auto profile",
+    dns: "Encrypted DNS",
+    tools: "Tools, backup and lists",
+  };
+
+  let settingsGroup = null;
+
+  function showSettingsGroup(g) {
+    settingsGroup = g;
+    for (const c of document.querySelectorAll("#tab-settings [data-group]")) {
+      c.classList.toggle("group-off", c.dataset.group !== g);
+    }
+    $("settingsMenu").hidden = !!g;
+    $("settingsHead").hidden = !g;
+    setText("settingsTitle", g ? SETTINGS_TITLES[g] : "");
+    for (const p of document.querySelectorAll("#tab-settings > p.hint")) p.hidden = !!g;
+    if (g === "dns") { S.dnsSynced = false; dnsRefresh(); }
+    window.scrollTo(0, 0);
+  }
+
+  function renderSettingsMenu() {
+    const v = S.saved || {};
+    setText("miEngine", `${v.ENGINE || "-"} · ${v.STRATEGY || "-"}`);
+    setText("miNetwork", `${v.IFACE || "any"} · apps ${v.APP_MODE || "disabled"}`);
+    setText("miAuto", `auto profile ${v.AUTO_NETWORK === "1" ? "on" : "off"} · start ${v.AUTO_START === "1" ? "on" : "off"}`);
+    setText("miTools", `logging ${v.LOG_ENABLED === "0" ? "off" : "on"}`);
+  }
+
+  let dnsProviderList = null;
+
+  async function dnsLoadProviders() {
+    if (dnsProviderList) return dnsProviderList;
+    const r = await ctl("dns-providers");
+    dnsProviderList = r.stdout.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [id, label, doh, dot] = l.split("|");
+      return { id, label, doh, dot: dot || "" };
+    });
+    return dnsProviderList;
+  }
+
+  async function dnsRenderProviders() {
+    const box = $("dnsProviders");
+    if (box.childElementCount || box.dataset.loading) return;
+    box.dataset.loading = "1";
+    for (const p of await dnsLoadProviders()) {
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = p.id;
+      cb.dataset.block = /malware|ads/.test(p.label) && !/client subnet/.test(p.label) ? "1" : "0";
+      const text = document.createElement("span");
+      text.className = "prov";
+      const name = document.createElement("b");
+      name.textContent = p.label;
+      const host = document.createElement("small");
+      host.textContent = `${p.doh.replace(/^https:\/\//, "").replace(/:443/, "")}${p.dot ? "  · Private DNS ok" : ""}`;
+      text.append(name, host);
+      label.append(cb, text);
+      box.appendChild(label);
+    }
+  }
+
+  function dnsSetChecked(pred) {
+    for (const c of $("dnsProviders").querySelectorAll("input")) c.checked = pred(c);
+  }
+
+  function dnsSelected() {
+    return Array.from($("dnsProviders").querySelectorAll("input:checked")).map((c) => c.value).join(" ");
+  }
+
+  async function dnsRefresh() {
+    await dnsRenderProviders();
+    const r = await ctl("dns-status");
+    const v = parseKV(r.stdout);
+    const running = v.doh_running === "1";
+    const port = v.doh_port || "5354";
+    const count = (v.doh_providers || "").split(/[ ,]+/).filter(Boolean).length;
+    const btn = $("dohToggleBtn");
+    if (running) {
+      const queries = Number(v.doh_queries || 0).toLocaleString();
+      setText("dohNow", `on · ${count} provider${count === 1 ? "" : "s"} · ${queries} DNS queries`);
+      btn.textContent = "Stop DoH proxy";
+      btn.classList.remove("primary");
+    } else {
+      setText("dohNow", v.doh_binary === "no" ? "dnscrypt-proxy not installed" : "off");
+      btn.textContent = "Start DoH proxy";
+      btn.classList.add("primary");
+    }
+    btn.disabled = v.doh_binary === "no" && !running;
+    // Show the saved provider choice the first time the card opens.
+    if (!S.dnsSynced) {
+      S.dnsSynced = true;
+      const saved = new Set((v.doh_providers || "").split(/[ ,]+/).filter(Boolean));
+      for (const c of $("dnsProviders").querySelectorAll("input")) c.checked = saved.has(c.value);
+    }
+    const mode = v.private_dns_mode || "unset";
+    const now = mode === "hostname" ? `on · ${v.private_dns_host || "?"}` : mode;
+    setText("dnsNow", now);
+    setText("miDns", running ? "DoH proxy on" : now === "off" ? "off" : now);
+  }
+
+  async function dohToggle() {
+    const btn = $("dohToggleBtn");
+    btn.disabled = true;
+    try {
+      const running = $("dohNow").textContent.startsWith("on");
+      let r;
+      if (running) {
+        r = await ctl("doh-stop");
+      } else {
+        const ids = dnsSelected().split(" ").filter(Boolean);
+        if (!ids.length) { toast("Tick at least one provider", 4000); return; }
+        const set = await ctl(`set DOH_PROVIDERS ${ids.join(",")}`);
+        if (set.errno !== 0) { toast((set.stderr || set.stdout).trim(), 6000); return; }
+        r = await ctl("doh-start");
+      }
+      const msg = (r.stdout || r.stderr).trim().split("\n").pop() || (r.errno === 0 ? "Done" : "Failed");
+      toast(msg, r.errno === 0 ? 4000 : 7000);
+      await dnsRefresh();
+      refresh();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function dnsShowResults(out) {
+    const box = $("dnsResults");
+    box.innerHTML = "";
+    for (const line of out.split("\n").map((x) => x.trim()).filter(Boolean)) {
+      const [name, ms, status] = line.split("|");
+      const row = document.createElement("div");
+      row.className = "res-row";
+      const n = document.createElement("span");
+      n.textContent = name;
+      const v = document.createElement("span");
+      v.textContent = status === "ok" ? `${ms} ms` : status || "failed";
+      row.append(n, v);
+      box.appendChild(row);
+    }
+  }
+
+  async function dnsTest() {
+    const ids = dnsSelected();
+    if (!ids) {
+      toast("Tick at least one provider", 4000);
+      return;
+    }
+    $("dnsTestBtn").disabled = true;
+    try {
+      const r = await ctl(`dns-test ${quote(ids)}`);
+      dnsShowResults(r.stdout);
+    } finally {
+      $("dnsTestBtn").disabled = false;
+    }
+  }
+
+  async function dnsFastest() {
+    const ids = dnsSelected();
+    if (!ids) {
+      toast("Tick at least one provider", 4000);
+      return;
+    }
+    $("dnsFastestBtn").disabled = true;
+    try {
+      const r = await ctl(`dns-fastest ${quote(ids)}`);
+      toast((r.stdout || r.stderr).trim().split("\n").pop() || "Done", 5000);
+      await dnsRefresh();
+    } finally {
+      $("dnsFastestBtn").disabled = false;
+    }
+  }
+
+  async function dnsOff() {
+    const r = await ctl("dns-apply off");
+    toast((r.stdout || r.stderr).trim().split("\n").pop() || "Done", 4000);
+    await dnsRefresh();
+  }
+
+  for (const b of document.querySelectorAll("[data-open]")) {
+    b.addEventListener("click", () => showSettingsGroup(b.dataset.open));
+  }
+  $("settingsBack").addEventListener("click", () => showSettingsGroup(null));
+  $("dnsTestBtn").addEventListener("click", dnsTest);
+  $("dnsFastestBtn").addEventListener("click", dnsFastest);
+  $("dnsOffBtn").addEventListener("click", dnsOff);
+  $("dohToggleBtn").addEventListener("click", dohToggle);
+  $("provBlock").addEventListener("click", () => dnsSetChecked((c) => c.dataset.block === "1"));
+  $("provAll").addEventListener("click", () => dnsSetChecked(() => true));
+  $("provNone").addEventListener("click", () => dnsSetChecked(() => false));
+  $("updDnsBtn").addEventListener("click", () => startUpdate("dnscrypt", "dnscrypt-proxy"));
+  showSettingsGroup(null);
+
 })();

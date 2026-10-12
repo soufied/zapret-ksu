@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR="${ZAPRET_MODDIR:-${0%/*}/..}"
 CONF="$MODDIR/config/zapret.conf"
 RUN_DIR="$MODDIR/run"
@@ -27,6 +26,11 @@ GF_UDP=""
 BYPASS_PRIVATE=1
 BYPASS_VPN=1
 CONNTRACK_ACCT=1
+UDP_PORTS=""
+APP_MODE="disabled"
+APP_LIST=""
+APP_UIDS=""
+APP_NOQUEUE=0
 
 . "$MODDIR/scripts/common.sh"
 log() { mlog fw INFO "$*"; }
@@ -56,6 +60,10 @@ validate() {
         case "$v" in *[!0-9,-]*) die "invalid port list '$v'" ;; esac
     done
     [ -n "$TCP_PORTS" ] || die "TCP_PORTS is empty"
+    UDP_PORTS=$(clean_ports "$UDP_PORTS")
+    case "$UDP_PORTS" in *[!0-9,-]*) die "invalid UDP_PORTS '$UDP_PORTS'" ;; esac
+    case "$APP_MODE" in disabled|include|exclude) ;; *) die "APP_MODE must be disabled, include or exclude" ;; esac
+    case "$APP_LIST" in *[!A-Za-z0-9._,]*) die "APP_LIST may only contain package names, UIDs and commas" ;; esac
 }
 
 join_ports() {
@@ -73,8 +81,42 @@ compute_ports() {
     UDP_BASE=""
     [ "$QUIC_ENABLED" = 1 ] && UDP_BASE="443"
     UDP_EFF=$(join_ports "$UDP_BASE" "$GF_UDP")
+    UDP_EFF=$(uniq_ports "$(join_ports "$UDP_EFF" "$UDP_PORTS")")
     TCP_EFF=$(uniq_ports "$(join_ports "$TCP_EFF" "$ZAPRET_EXTRA_TCP")")
     UDP_EFF=$(uniq_ports "$(join_ports "$UDP_EFF" "$ZAPRET_EXTRA_UDP")")
+}
+
+PKG_LIST="${ZAPRET_PKG_LIST:-/data/system/packages.list}"
+
+lookup_uid() {
+    u=$(awk -v p="$1" '$1==p {print $2; exit}' "$PKG_LIST" 2>/dev/null)
+    if [ -z "$u" ] && have pm; then
+        u=$(pm list packages -U "$1" 2>/dev/null | sed -n "s/^package:$1 uid:\([0-9]*\).*/\1/p" | head -n 1)
+    fi
+    echo "$u"
+}
+
+resolve_apps() {
+    APP_UIDS=""
+    APP_NOQUEUE=0
+    [ "$APP_MODE" = disabled ] && return 0
+    for entry in $(echo "$APP_LIST" | tr ',' ' '); do
+        case "$entry" in
+            *[!0-9]*) uid=$(lookup_uid "$entry") ;;
+            *)        uid="$entry" ;;
+        esac
+        if [ -n "$uid" ]; then
+            APP_UIDS="$APP_UIDS $uid"
+        else
+            log "warning: no UID found for $entry; skipped"
+        fi
+    done
+    APP_UIDS=$(echo $APP_UIDS | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
+    if [ "$APP_MODE" = include ] && [ -z "$APP_UIDS" ]; then
+        APP_NOQUEUE=1
+        log "warning: include mode with no usable apps; nothing will be intercepted"
+    fi
+    log "app filter: mode=$APP_MODE uids=${APP_UIDS:-none}"
 }
 
 enable_acct() {
@@ -84,7 +126,6 @@ enable_acct() {
         echo 1 > "$P" 2>/dev/null || log "warning: could not enable conntrack accounting"
     fi
 }
-
 
 nft_usable() {
     have nft || return 1
@@ -126,6 +167,9 @@ nft_build() {
         IFO="oifname \"$NFT_IF\" "
         IFI="iifname \"$NFT_IF\" "
     fi
+    UIDSET=$(echo $APP_UIDS | sed 's/ /, /g')
+    QSKUID=""
+    [ "$APP_MODE" = include ] && [ -n "$UIDSET" ] && QSKUID="meta skuid { $UIDSET } "
 
     mkdir -p "$RUN_DIR"
     {
@@ -139,11 +183,16 @@ nft_build() {
             echo "    ip6 daddr { $NETS6_CSV } return"
         fi
         echo "    meta mark & $FWMARK == $FWMARK return"
-        if [ -n "$TCP_EFF" ]; then
-            echo "    ${IFO}tcp dport { $(nft_set "$TCP_EFF") } ct original packets 1-6 queue num $QNUM bypass"
+        if [ "$APP_MODE" = exclude ] && [ -n "$UIDSET" ]; then
+            echo "    meta skuid { $UIDSET } return"
         fi
-        if [ -n "$UDP_EFF" ]; then
-            echo "    ${IFO}udp dport { $(nft_set "$UDP_EFF") } ct original packets 1-6 queue num $QNUM bypass"
+        if [ "$APP_NOQUEUE" != 1 ]; then
+            if [ -n "$TCP_EFF" ]; then
+                echo "    ${IFO}${QSKUID}tcp dport { $(nft_set "$TCP_EFF") } ct original packets 1-6 queue num $QNUM bypass"
+            fi
+            if [ -n "$UDP_EFF" ]; then
+                echo "    ${IFO}${QSKUID}udp dport { $(nft_set "$UDP_EFF") } ct original packets 1-6 queue num $QNUM bypass"
+            fi
         fi
         echo "  }"
         echo "  chain pre {"
@@ -154,7 +203,7 @@ nft_build() {
             echo "    ip6 saddr { $NETS6_CSV } return"
         fi
         echo "    meta mark & $FWMARK == $FWMARK return"
-        if [ -n "$TCP_EFF" ]; then
+        if [ "$APP_NOQUEUE" != 1 ] && [ -n "$TCP_EFF" ]; then
             echo "    ${IFI}tcp sport { $(nft_set "$TCP_EFF") } ct reply packets 1-3 queue num $QNUM bypass"
         fi
         echo "  }"
@@ -180,6 +229,7 @@ ipt_probe() {
     T="$1 $IPT_WAIT -t mangle"
     HAVE_CONNBYTES=0
     HAVE_NFQ=0
+    HAVE_OWNER=0
     $T -N ZAPRET_PROBE >/dev/null 2>&1
     if $T -A ZAPRET_PROBE -p tcp --dport 1 -m connbytes --connbytes-dir=original \
         --connbytes-mode=packets --connbytes 1:6 -j RETURN >/dev/null 2>&1; then
@@ -189,9 +239,28 @@ ipt_probe() {
         --queue-bypass >/dev/null 2>&1; then
         HAVE_NFQ=1
     fi
+    if $T -A ZAPRET_PROBE -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1; then
+        HAVE_OWNER=1
+    fi
     $T -F ZAPRET_PROBE >/dev/null 2>&1
     $T -X ZAPRET_PROBE >/dev/null 2>&1
     [ "$HAVE_NFQ" = 1 ]
+}
+
+ipt_post_ports() {
+    if [ -n "$TCP_EFF" ]; then
+        for p in $(echo "$TCP_EFF" | tr ',' ' '); do
+            $T -A "$IPT_POST" $OUTIF $1 -p tcp --dport "$(ipt_port "$p")" $CB_OUT \
+                -j NFQUEUE --queue-num "$QNUM" --queue-bypass || return 1
+        done
+    fi
+    if [ -n "$UDP_EFF" ]; then
+        for p in $(echo "$UDP_EFF" | tr ',' ' '); do
+            $T -A "$IPT_POST" $OUTIF $1 -p udp --dport "$(ipt_port "$p")" $CB_OUT \
+                -j NFQUEUE --queue-num "$QNUM" --queue-bypass || return 1
+        done
+    fi
+    return 0
 }
 
 ipt_family() {
@@ -202,6 +271,10 @@ ipt_family() {
 
     if ! ipt_probe "$B"; then
         log "error: $B lacks the NFQUEUE target (kernel built without xt_NFQUEUE)"
+        return 1
+    fi
+    if [ "$APP_MODE" != disabled ] && [ "$HAVE_OWNER" != 1 ]; then
+        log "error: $B lacks the owner match (xt_owner); app filtering needs it"
         return 1
     fi
 
@@ -232,22 +305,23 @@ ipt_family() {
         done
     fi
     $T -A "$IPT_POST" -m mark --mark "$FWMARK/$FWMARK" -j RETURN || return 1
+    if [ "$APP_MODE" = exclude ]; then
+        for u in $APP_UIDS; do
+            $T -A "$IPT_POST" -m owner --uid-owner "$u" -j RETURN || return 1
+        done
+    fi
 
     OUTIF=""
     [ "$IFACE" != any ] && OUTIF="-o $IFACE"
-    if [ -n "$TCP_EFF" ]; then
-        for p in $(echo "$TCP_EFF" | tr ',' ' '); do
-            $T -A "$IPT_POST" $OUTIF -p tcp --dport "$(ipt_port "$p")" $CB_OUT \
-                -j NFQUEUE --queue-num "$QNUM" --queue-bypass || return 1
+    if [ "$APP_MODE" = include ]; then
+        for u in $APP_UIDS; do
+            ipt_post_ports "-m owner --uid-owner $u" || return 1
         done
-    fi
-    if [ -n "$UDP_EFF" ]; then
-        for p in $(echo "$UDP_EFF" | tr ',' ' '); do
-            $T -A "$IPT_POST" $OUTIF -p udp --dport "$(ipt_port "$p")" $CB_OUT \
-                -j NFQUEUE --queue-num "$QNUM" --queue-bypass || return 1
-        done
+    else
+        ipt_post_ports "" || return 1
     fi
 
+    [ "$APP_NOQUEUE" = 1 ] && return 0
     $T -A "$IPT_PRE" -i lo -j RETURN || return 1
     if [ "$BYPASS_PRIVATE" = 1 ]; then
         for n in $PRIV; do
@@ -300,7 +374,6 @@ ipt_apply() {
     return 0
 }
 
-
 clear_all() {
     nft_clear
     ipt_clear_all
@@ -321,6 +394,7 @@ cmd_start() {
     load_conf
     validate
     compute_ports
+    resolve_apps
     pick_backend
     enable_acct
     clear_all

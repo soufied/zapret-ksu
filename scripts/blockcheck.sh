@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR="${0%/*}/.."
 export MLOG_ECHO=0
 . "$MODDIR/scripts/common.sh"
@@ -33,23 +32,30 @@ write_state() {
 }
 
 probe() {
-    code=$(curl -s -k -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time "$TIMEOUT" "$@" 2>/dev/null)
-    [ -n "$code" ] && [ "$code" != "000" ]
+    out=$(curl -s -k -o /dev/null -w '%{http_code} %{time_total}' --connect-timeout 2 --max-time "$TIMEOUT" "$@" 2>/dev/null)
+    code=${out%% *}
+    t=${out#* }
+    case "$t" in ''|*[!0-9.]*) t=0 ;; esac
+    [ -n "$code" ] && [ "$code" != "000" ] || return 1
+    PROBE_MS=$(awk "BEGIN{printf \"%d\", $t*1000}" 2>/dev/null)
+    [ -n "$PROBE_MS" ] || PROBE_MS=0
+    return 0
 }
 
 domain_probes() {
     d="$1"; r=""
-    probe "http://$d/" && r="$r h"
-    probe --tlsv1.2 --tls-max 1.2 "https://$d/" && r="$r 2"
-    probe --tlsv1.3 --tls-max 1.3 "https://$d/" && r="$r 3"
+    probe "http://$d/" && r="$r h ms$PROBE_MS"
+    probe --tlsv1.2 --tls-max 1.2 "https://$d/" && r="$r 2 ms$PROBE_MS"
+    probe --tlsv1.3 --tls-max 1.3 "https://$d/" && r="$r 3 ms$PROBE_MS"
     if [ "$HAVE_H3" = 1 ]; then
-        probe --http3-only "https://$d/" && r="$r q"
+        probe --http3-only "https://$d/" && r="$r q ms$PROBE_MS"
     fi
     echo "$r" > "$2"
 }
 
 measure() {
     M_HTTP=0; M_TLS12=0; M_TLS13=0; M_QUIC=0
+    LAT_SUM=0; LAT_N=0
     tmp="$RUN_DIR/bc-probe"
     rm -rf "$tmp"; mkdir -p "$tmp"
     n=0
@@ -65,16 +71,20 @@ measure() {
         case "$r" in *" 2 "*) M_TLS12=$((M_TLS12 + 1)) ;; esac
         case "$r" in *" 3 "*) M_TLS13=$((M_TLS13 + 1)) ;; esac
         case "$r" in *" q "*) M_QUIC=$((M_QUIC + 1)) ;; esac
+        for tok in $(cat "$f"); do
+            case "$tok" in ms*) LAT_SUM=$((LAT_SUM + ${tok#ms})); LAT_N=$((LAT_N + 1)) ;; esac
+        done
     done
     rm -rf "$tmp"
     per=3
     [ "$HAVE_H3" = 1 ] && per=4
     M_MAX=$((n * per))
     M_SCORE=$((M_HTTP + M_TLS12 + M_TLS13 + M_QUIC))
+    M_AVG=$((LAT_N > 0 ? LAT_SUM / LAT_N : 0))
 }
 
 record() {
-    echo "$1|$M_SCORE|$M_MAX|$M_HTTP|$M_TLS12|$M_TLS13|$M_QUIC|$2" >> "$RUN_DIR/blockcheck.raw"
+    echo "$1|$M_SCORE|$M_MAX|$M_HTTP|$M_TLS12|$M_TLS13|$M_QUIC|${M_AVG:-0}|$2" >> "$RUN_DIR/blockcheck.raw"
 }
 
 fail_run() {
@@ -150,7 +160,7 @@ echo "$presets" | while IFS= read -r preset; do
     write_state running "$preset" "$done_n" "$TOTAL" "testing $preset" "$WAS_ACTIVE"
     bc_log INFO "testing $preset ($done_n/$TOTAL)"
     if ! ZAPRET_OVERRIDE_STRATEGY="$preset" sh "$CTL" start >>"$LOG" 2>&1; then
-        M_SCORE=0; M_MAX=0; M_HTTP=0; M_TLS12=0; M_TLS13=0; M_QUIC=0
+        M_SCORE=0; M_MAX=0; M_HTTP=0; M_TLS12=0; M_TLS13=0; M_QUIC=0; M_AVG=0
         record "$preset" "engine did not start"
         bc_log WARN "$preset: engine did not start"
         sh "$CTL" stop >/dev/null 2>&1
@@ -164,7 +174,7 @@ done
 
 {
     grep '^__baseline__|' "$RUN_DIR/blockcheck.raw"
-    grep -v '^__baseline__|' "$RUN_DIR/blockcheck.raw" | sort -t'|' -k2,2nr
+    grep -v '^__baseline__|' "$RUN_DIR/blockcheck.raw" | sort -t'|' -k2,2nr -k8,8n
 } > "$BC_CSV"
 rm -f "$RUN_DIR/blockcheck.raw"
 

@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR=${0%/*}
 export MLOG_ECHO=0
 . "$MODDIR/scripts/common.sh"

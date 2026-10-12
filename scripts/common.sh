@@ -1,4 +1,3 @@
-
 LOG="$MODDIR/zapret.log"
 RUN_DIR="$MODDIR/run"
 LOG_MAX=524288

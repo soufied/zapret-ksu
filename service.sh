@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR=${0%/*}
 export MLOG_ECHO=0
 . "$MODDIR/scripts/common.sh"
@@ -9,7 +8,7 @@ conf_value() {
     sed -n "s/^$1=//p" "$MODDIR/config/zapret.conf" 2>/dev/null | tail -n 1 | tr -d '"'
 }
 
-try_start() { # ignore_profile label
+try_start() {
     n=1
     while [ "$n" -le 12 ]; do
         if ZAPRET_IGNORE_PROFILE="$1" sh "$CTL" start >>"$LOG" 2>&1; then
@@ -36,6 +35,15 @@ rm -f "$MODDIR/run/auto.wanted" "$MODDIR/run/auto.pid" "$MODDIR/run/auto.applied
 AUTO_NETWORK=$(conf_value AUTO_NETWORK)
 AUTO_NETWORK_START=$(conf_value AUTO_NETWORK_START)
 AUTO_START=$(conf_value AUTO_START)
+
+if [ "$(conf_value DOH_AUTO_START)" = 1 ]; then
+    if [ ! -x "$MODDIR/bin/dnscrypt-proxy" ] && [ -x /data/adb/zapret-ksu-data/bin/dnscrypt-proxy ]; then
+        mkdir -p "$MODDIR/bin"
+        cp -f /data/adb/zapret-ksu-data/bin/dnscrypt-proxy "$MODDIR/bin/dnscrypt-proxy"
+        chmod 0755 "$MODDIR/bin/dnscrypt-proxy"
+    fi
+    sh "$CTL" doh-start >>"$LOG" 2>&1 || mlog svc ERROR "DoH proxy did not start; press Start in the WebUI"
+fi
 
 if [ "$AUTO_NETWORK" = 1 ]; then
     sh "$CTL" auto-ensure >>"$LOG" 2>&1

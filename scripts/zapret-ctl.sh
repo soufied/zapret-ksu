@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR="${0%/*}/.."
 . "$MODDIR/scripts/common.sh"
 
@@ -13,7 +12,7 @@ NFQWS2_PID="$RUN_DIR/nfqws2.pid"
 UPDATE_STATE="$RUN_DIR/update.state"
 UPDATE_PID="$RUN_DIR/update.pid"
 
-EDITABLE="ENGINE STRATEGY NFQWS_UID BACKEND IFACE TCP_PORTS QUIC_ENABLED GAME_FILTER_TCP GAME_FILTER_UDP BYPASS_PRIVATE BYPASS_VPN CONNTRACK_ACCT AUTO_START BACKUP_LISTS LOG_ENABLED AUTO_NETWORK AUTO_NETWORK_START AUTO_STOP_NONE WIFI_IFACE WIFI_ENGINE WIFI_STRATEGY MOBILE_IFACE MOBILE_ENGINE MOBILE_STRATEGY"
+EDITABLE="ENGINE STRATEGY NFQWS_UID BACKEND IFACE TCP_PORTS QUIC_ENABLED GAME_FILTER_TCP GAME_FILTER_UDP BYPASS_PRIVATE BYPASS_VPN CONNTRACK_ACCT AUTO_START BACKUP_LISTS LOG_ENABLED UDP_PORTS APP_MODE APP_LIST AUTO_NETWORK AUTO_NETWORK_START AUTO_STOP_NONE WIFI_IFACE WIFI_ENGINE WIFI_STRATEGY MOBILE_IFACE MOBILE_ENGINE MOBILE_STRATEGY DOH_ENABLED DOH_AUTO_START DOH_PROVIDERS"
 NET_ROUTE="${ZAPRET_NET_ROUTE:-/proc/net/route}"
 NET_SYS="${ZAPRET_NET_SYS:-/sys/class/net}"
 AUTO_PID="$RUN_DIR/auto.pid"
@@ -711,9 +710,13 @@ cmd_status() {
     fi
     sh "$FW" status 2>/dev/null
     if engine_running; then echo "nfqws_running=1"; else echo "nfqws_running=0"; fi
-    for c in nfqws1 nfqws2 presets; do
+    for c in nfqws1 nfqws2 presets dnscrypt; do
         [ -f "$RUN_DIR/$c.version" ] && echo "${c}_version=$(cat "$RUN_DIR/$c.version")"
     done
+    echo "dns_mode=$(settings get global private_dns_mode 2>/dev/null)"
+    echo "dns_host=$(settings get global private_dns_specifier 2>/dev/null)"
+    echo "doh_running=$(doh_running && echo 1 || echo 0)"
+    echo "doh_count=$(doh_normalize "$(conf_get DOH_PROVIDERS)" | wc -w | tr -d ' ')"
     echo "presets_count=$(count_files "$Z2_DIR/presets" '*.txt')"
     echo "strategies_count=$(count_files "$Z1_DIR" '*.bat')"
     return 0
@@ -743,6 +746,16 @@ cmd_set() {
             case "$v" in ""|*[!0-9:]*) die "NFQWS_UID must look like 0:0" ;; esac ;;
         AUTO_NETWORK_START|AUTO_STOP_NONE)
             case "$v" in 0|1) ;; *) die "$k must be 0 or 1" ;; esac ;;
+        UDP_PORTS)
+            case "$v" in ""|*[!0-9,-]*) die "UDP_PORTS may only contain ports, ranges and commas" ;; esac ;;
+        APP_MODE)
+            case "$v" in disabled|include|exclude) ;; *) die "APP_MODE must be disabled, include or exclude" ;; esac ;;
+        APP_LIST)
+            case "$v" in *[!A-Za-z0-9._,]*) die "APP_LIST may only contain package names, UIDs and commas" ;; esac ;;
+        DOH_ENABLED|DOH_AUTO_START)
+            case "$v" in 0|1) ;; *) die "$k must be 0 or 1" ;; esac ;;
+        DOH_PROVIDERS)
+            case "$v" in *[!A-Za-z0-9,._-]*) die "DOH_PROVIDERS may only contain provider ids and commas" ;; esac ;;
         IFACE|WIFI_IFACE|MOBILE_IFACE)
             case "$v" in ""|*[!A-Za-z0-9._+-]*) die "invalid interface name" ;; esac ;;
         AUTO_NETWORK)
@@ -802,8 +815,8 @@ update_busy() {
 cmd_update() {
     tgt="${1:-}"
     case "$tgt" in
-        nfqws1|nfqws2|presets|strategies|all) ;;
-        *) die "update target must be nfqws1, nfqws2, presets, strategies or all" ;;
+        nfqws1|nfqws2|presets|strategies|dnscrypt|all) ;;
+        *) die "update target must be nfqws1, nfqws2, presets, strategies, dnscrypt or all" ;;
     esac
     if update_busy; then
         echo "an update is already running; wait for it to finish"
@@ -959,6 +972,573 @@ cmd_bc_status() {
     echo "bc_engine=$eng"
 }
 
+bbx() {
+    if [ -n "$BB" ]; then "$BB" "$@"; else "$@"; fi
+}
+
+app_label() {
+    ov="$MODDIR/config/app-names.txt"
+    if [ -f "$ov" ]; then
+        o=$(sed -n "s/^$1=//p" "$ov" | head -n 1)
+        if [ -n "$o" ]; then echo "$o"; return 0; fi
+    fi
+    case "$1" in
+        com.google.android.youtube) echo "YouTube" ;;
+        app.morphe.android.youtube) echo "YouTube (Morphe)" ;;
+        app.revanced.android.youtube) echo "YouTube (ReVanced)" ;;
+        com.google.android.apps.youtube.music) echo "YouTube Music" ;;
+        app.morphe.android.apps.youtube.music) echo "YouTube Music (Morphe)" ;;
+        app.revanced.android.apps.youtube.music) echo "YouTube Music (ReVanced)" ;;
+        com.google.android.apps.youtube.kids) echo "YouTube Kids" ;;
+        com.instagram.android) echo "Instagram" ;;
+        com.twitter.android) echo "X" ;;
+        com.discord) echo "Discord" ;;
+        org.telegram.messenger) echo "Telegram" ;;
+        com.whatsapp) echo "WhatsApp" ;;
+        com.facebook.katana) echo "Facebook" ;;
+        com.facebook.orca) echo "Messenger" ;;
+        com.zhiliaoapp.musically) echo "TikTok" ;;
+        com.reddit.frontpage) echo "Reddit" ;;
+        com.spotify.music) echo "Spotify" ;;
+        com.netflix.mediaclient) echo "Netflix" ;;
+        com.snapchat.android) echo "Snapchat" ;;
+        com.linkedin.android) echo "LinkedIn" ;;
+        com.pinterest) echo "Pinterest" ;;
+        com.viber.voip) echo "Viber" ;;
+        com.vkontakte.android) echo "VK" ;;
+        com.valvesoftware.android.steam.community) echo "Steam" ;;
+        com.roblox.client) echo "Roblox" ;;
+        com.microsoft.teams) echo "Microsoft Teams" ;;
+        us.zoom.videomeetings) echo "Zoom" ;;
+        com.skype.raider) echo "Skype" ;;
+        com.google.android.gm) echo "Gmail" ;;
+        com.google.android.apps.maps) echo "Google Maps" ;;
+        com.google.android.apps.photos) echo "Google Photos" ;;
+        com.google.android.apps.messaging) echo "Messages" ;;
+        com.google.android.googlequicksearchbox) echo "Google" ;;
+        com.android.chrome) echo "Chrome" ;;
+        org.mozilla.firefox) echo "Firefox" ;;
+        com.android.vending) echo "Google Play Store" ;;
+        ru.yandex.searchplugin) echo "Yandex" ;;
+        com.amazon.mShop.android.shopping) echo "Amazon" ;;
+        com.ebay.mobile) echo "eBay" ;;
+        *)
+            last=${1##*.}
+            echo "$last" | tr '_-' '  ' | awk '{ print toupper(substr($0,1,1)) substr($0,2) }'
+            ;;
+    esac
+}
+
+cmd_apps_list() {
+    PKG="${ZAPRET_PKG_LIST:-/data/system/packages.list}"
+    mkrun
+    CACHE="$RUN_DIR/apps.list"
+    KEYF="$RUN_DIR/apps.key"
+    if [ -f "$PKG" ]; then key=$(ls -l "$PKG" 2>/dev/null | tr -s ' '); else key=""; fi
+    if [ -n "$key" ] && [ -f "$CACHE" ] && [ "$(cat "$KEYF" 2>/dev/null)" = "$key" ]; then
+        cat "$CACHE"
+        return 0
+    fi
+    USR="$RUN_DIR/user-packages.txt"
+    if command -v pm >/dev/null 2>&1; then
+        pm list packages -3 2>/dev/null | sed -n 's/^package://p' | tr -d '\r' | sort -u > "$USR"
+        HAVE_USR=1
+    else
+        : > "$USR"
+        HAVE_USR=0
+    fi
+    {
+        if [ -f "$PKG" ]; then
+            awk '$2>=10000 {print $1"|"$2}' "$PKG" | sort -u
+        elif command -v pm >/dev/null 2>&1; then
+            pm list packages -U 2>/dev/null | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\).*/\1|\2/p' | sort -u
+        else
+            die "no package list available (neither $PKG nor pm)"
+        fi | while IFS='|' read -r pkg uid; do
+            printf '%s|%s|%s\n' "$pkg" "$uid" "$(app_label "$pkg")"
+        done | awk -F'|' -v usr="$USR" -v have="$HAVE_USR" '
+            BEGIN { while ((getline l < usr) > 0) u[l] = 1; close(usr) }
+            { t = (have == "1" && !($1 in u)) ? "s" : "u"; print $0 "|" t }'
+    } > "$CACHE.tmp" && mv -f "$CACHE.tmp" "$CACHE"
+    [ -n "$key" ] && echo "$key" > "$KEYF"
+    cat "$CACHE"
+    return 0
+}
+
+cmd_latest_versions() {
+    t1=$(http_get "https://api.github.com/repos/bol-van/zapret/releases/latest" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+    t2=$(http_get "https://api.github.com/repos/bol-van/zapret2/releases/latest" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+    t3=$(http_get "https://api.github.com/repos/Flowseal/zapret-discord-youtube/commits/main" | grep -o '"sha": *"[0-9a-f]\{40\}"' | head -n 1 | grep -o '[0-9a-f]\{40\}' | cut -c1-7)
+    echo "latest_nfqws1=${t1:-unknown}"
+    echo "latest_nfqws2=${t2:-unknown}"
+    echo "latest_strategies=${t3:-unknown}"
+    echo "installed_nfqws1=$(cat "$RUN_DIR/nfqws1.version" 2>/dev/null)"
+    echo "installed_nfqws2=$(cat "$RUN_DIR/nfqws2.version" 2>/dev/null)"
+    echo "installed_strategies=$(cat "$RUN_DIR/strategies.version" 2>/dev/null)"
+}
+
+apk_icon_entry() {
+    names="$1"
+    entry=""
+    for dpi in xxxhdpi xxhdpi xhdpi hdpi mdpi; do
+        entry=$(echo "$names" | grep -E "^res/mipmap-$dpi[^/]*/(ic_launcher|ic_launcher_round|icon|app_icon)\.(png|webp)$" | head -n 1)
+        [ -n "$entry" ] && break
+    done
+    if [ -z "$entry" ]; then
+        entry=$(echo "$names" | grep -E '^res/(mipmap|drawable)[^/]*/(ic_launcher|icon|app_icon)[^/]*\.(png|webp)$' | head -n 1)
+    fi
+    echo "$entry"
+}
+
+apk_list() {
+    bbx unzip -l "$1" 2>/dev/null | grep -o 'res/[^[:space:]]*'
+}
+
+icon_one() {
+    pkg="$1"
+    case "$pkg" in
+        ""|*[!A-Za-z0-9._]*) return 0 ;;
+    esac
+    cdir="$RUN_DIR/icons"
+    mkdir -p "$cdir" 2>/dev/null
+    cache="$cdir/$pkg.txt"
+    if [ -f "$cache" ]; then
+        cat "$cache"
+        return 0
+    fi
+    command -v pm >/dev/null 2>&1 || return 0
+    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -n 1)
+    if [ -z "$apk" ] || [ ! -f "$apk" ]; then
+        return 0
+    fi
+    entry=$(apk_icon_entry "$(apk_list "$apk")")
+    if [ -z "$entry" ]; then
+        : > "$cache"
+        return 0
+    fi
+    ext=${entry##*.}
+    data=$(bbx unzip -p "$apk" "$entry" 2>/dev/null | b64 | tr -d '\n')
+    size=${#data}
+    if [ "$size" -eq 0 ] || [ "$size" -gt 120000 ]; then
+        : > "$cache"
+        return 0
+    fi
+    echo "$ext $data" > "$cache"
+    cat "$cache"
+}
+
+cmd_apps_icon() {
+    icon_one "${2:-}"
+}
+
+cmd_apps_icons() {
+    shift
+    for pkg in "$@"; do
+        r=$(icon_one "$pkg")
+        [ -n "$r" ] && printf '%s|%s\n' "$pkg" "$r"
+    done
+    return 0
+}
+
+cmd_apps_diag() {
+    pkg="${2:-}"
+    echo "unzip available: $(bbx unzip -v >/dev/null 2>&1 && echo yes || echo no)"
+    echo "base64 available: $(command -v base64 >/dev/null 2>&1 && echo yes || (test -n "$BB" && echo busybox || echo no))"
+    echo "pm available: $(command -v pm >/dev/null 2>&1 && echo yes || echo no)"
+    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -n 1)
+    echo "apk: ${apk:-not found}"
+    if [ -n "$apk" ] && [ -f "$apk" ]; then
+        echo "res entries: $(apk_list "$apk" | wc -l)"
+        echo "icon entry: $(apk_icon_entry "$(apk_list "$apk")")"
+    fi
+}
+
+DOH_PORT=5354
+DOH_BIN="$MODDIR/bin/dnscrypt-proxy"
+DOH_DIR="$RUN_DIR/doh"
+DOH_TOML="$DOH_DIR/dnscrypt-proxy.toml"
+DOH_PID="$RUN_DIR/doh.pid"
+DOH_WATCH_PID="$RUN_DIR/doh-watch.pid"
+DOH_LOG="$RUN_DIR/doh.log"
+DOH_STAMPS="$MODDIR/config/doh-providers.txt"
+DOH_NFT_TABLE="zapret_doh"
+DOH_IPT_CHAIN="ZAPRET_DOH"
+DOH_V6=0
+
+conf_get() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tail -n 1 | tr -d '"'; }
+
+doh_running() { [ -f "$DOH_PID" ] && kill -0 "$(cat "$DOH_PID")" 2>/dev/null; }
+
+doh_stop_proc() {
+    if [ -f "$DOH_WATCH_PID" ]; then kill "$(cat "$DOH_WATCH_PID")" 2>/dev/null; fi
+    rm -f "$DOH_WATCH_PID"
+    if [ -f "$DOH_PID" ]; then kill "$(cat "$DOH_PID")" 2>/dev/null; fi
+    rm -f "$DOH_PID"
+}
+
+doh_ipt_bin() {
+    for b in iptables-legacy iptables; do
+        command -v "$b" >/dev/null 2>&1 && { echo "$b"; return 0; }
+    done
+    return 1
+}
+
+doh_v6_loopback() {
+    grep -q '^00000000000000000000000000000001 ' /proc/net/if_inet6 2>/dev/null
+}
+
+doh_nft_redirect() {
+    nft -f - >/dev/null 2>&1 <<NFT
+table $1 $DOH_NFT_TABLE {
+  chain out {
+    type nat hook output priority -100; policy accept;
+    udp dport 53 counter redirect to :$DOH_PORT
+    tcp dport 53 counter redirect to :$DOH_PORT
+  }
+}
+NFT
+}
+
+doh_ipt_redirect() {
+    $1 -w 5 -t nat -N "$DOH_IPT_CHAIN" 2>/dev/null
+    $1 -w 5 -t nat -F "$DOH_IPT_CHAIN" || return 1
+    $1 -w 5 -t nat -A "$DOH_IPT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports "$DOH_PORT" || return 1
+    $1 -w 5 -t nat -A "$DOH_IPT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports "$DOH_PORT" || return 1
+    $1 -w 5 -t nat -C OUTPUT -j "$DOH_IPT_CHAIN" 2>/dev/null || $1 -w 5 -t nat -I OUTPUT 1 -j "$DOH_IPT_CHAIN" || return 1
+}
+
+doh_rules_add() {
+    DOH_V6=0
+    if command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1; then
+        nft delete table ip "$DOH_NFT_TABLE" >/dev/null 2>&1
+        nft delete table ip6 "$DOH_NFT_TABLE" >/dev/null 2>&1
+        if doh_nft_redirect ip; then
+            mlog ctl INFO "DNS redirect: IPv4 port 53 -> 127.0.0.1:$DOH_PORT (nftables)"
+            if doh_v6_loopback && doh_nft_redirect ip6; then
+                DOH_V6=1
+                mlog ctl INFO "DNS redirect: IPv6 port 53 -> [::1]:$DOH_PORT (nftables)"
+            fi
+            return 0
+        fi
+        nft delete table ip "$DOH_NFT_TABLE" >/dev/null 2>&1
+    fi
+    IPT=$(doh_ipt_bin) || return 1
+    doh_ipt_redirect "$IPT" || return 1
+    mlog ctl INFO "DNS redirect: IPv4 port 53 -> 127.0.0.1:$DOH_PORT (iptables)"
+    if doh_v6_loopback && command -v ip6tables >/dev/null 2>&1 && doh_ipt_redirect ip6tables; then
+        DOH_V6=1
+        mlog ctl INFO "DNS redirect: IPv6 port 53 -> [::1]:$DOH_PORT (iptables)"
+    fi
+    return 0
+}
+
+doh_rules_remove() {
+    nft delete table ip "$DOH_NFT_TABLE" >/dev/null 2>&1
+    nft delete table ip6 "$DOH_NFT_TABLE" >/dev/null 2>&1
+    for IPT in iptables-legacy iptables ip6tables; do
+        command -v "$IPT" >/dev/null 2>&1 || continue
+        n=0
+        while [ "$n" -lt 5 ] && $IPT -w 5 -t nat -D OUTPUT -j "$DOH_IPT_CHAIN" 2>/dev/null; do n=$((n + 1)); done
+        $IPT -w 5 -t nat -F "$DOH_IPT_CHAIN" 2>/dev/null
+        $IPT -w 5 -t nat -X "$DOH_IPT_CHAIN" 2>/dev/null
+    done
+    return 0
+}
+
+doh_redirect_active() {
+    if nft list table ip "$DOH_NFT_TABLE" >/dev/null 2>&1; then echo 1; return; fi
+    if IPT=$(doh_ipt_bin) && $IPT -w 5 -t nat -S "$DOH_IPT_CHAIN" >/dev/null 2>&1; then echo 1; return; fi
+    echo 0
+}
+
+doh_queries() {
+    n=0
+    if nft list table ip "$DOH_NFT_TABLE" >/dev/null 2>&1; then
+        n=$(nft list table ip "$DOH_NFT_TABLE" 2>/dev/null | sed -n 's/.*counter packets \([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s+0}')
+    elif IPT=$(doh_ipt_bin); then
+        n=$($IPT -w 5 -t nat -L "$DOH_IPT_CHAIN" -v -n -x 2>/dev/null | awk 'NR>2{s+=$1} END{print s+0}')
+    fi
+    echo "${n:-0}"
+}
+
+doh_normalize() {
+    out=""
+    for id in $(echo "$1" | tr ',' ' '); do
+        case "$id" in
+            adguard) id=adguard-94-140-14-14-dns-adguard-dns-com ;;
+            controld-ads) id=controld-76-76-2-11-freedns-controld-com-p2 ;;
+            controld-uncensored) id=controld-76-76-2-11-freedns-controld-com-uncensored ;;
+            cloudflare-security) id=cloudflare-security-1-0-0-2-1-0-0-2 ;;
+            quad9) id=quad9-9-9-9-9-dns9-quad9-net-443 ;;
+            cloudflare) id=cloudflare-1-0-0-1-dns-cloudflare-com ;;
+        esac
+        out="$out${out:+ }$id"
+    done
+    echo "$out"
+}
+
+doh_render_toml() {
+    mkdir -p "$DOH_DIR" || return 1
+    names=""
+    statics=""
+    for id in $(echo "$1" | tr ',' ' '); do
+        stamp=$(awk -F'|' -v i="$id" '$1==i {print $5; exit}' "$DOH_STAMPS" 2>/dev/null)
+        [ -n "$stamp" ] || { mlog ctl WARN "unknown DoH provider skipped: $id"; continue; }
+        names="$names${names:+, }'$id'"
+        statics="$statics[static.'$id']
+stamp = '$stamp'
+"
+    done
+    [ -n "$names" ] || return 1
+    if [ "$2" = 1 ]; then
+        listen="'127.0.0.1:$DOH_PORT', '[::1]:$DOH_PORT'"
+    else
+        listen="'127.0.0.1:$DOH_PORT'"
+    fi
+    {
+        echo "listen_addresses = [$listen]"
+        echo "server_names = [$names]"
+        echo "ipv4_servers = true"
+        echo "ipv6_servers = true"
+        echo "dnscrypt_servers = false"
+        echo "doh_servers = true"
+        echo "require_dnssec = false"
+        echo "require_nolog = false"
+        echo "require_nofilter = false"
+        echo "ignore_system_dns = true"
+        echo "lb_strategy = 'p2'"
+        echo "lb_estimator = true"
+        echo "cache = true"
+        echo "timeout = 5000"
+        echo "log_level = 2"
+        echo "use_syslog = false"
+        echo ""
+        printf '%s' "$statics"
+    } > "$DOH_TOML"
+}
+
+doh_start_proxy() {
+    doh_render_toml "$1" "$2" || return 2
+    : > "$DOH_LOG"
+    nohup "$DOH_BIN" -config "$DOH_TOML" >>"$DOH_LOG" 2>&1 </dev/null &
+    pid=$!
+    echo "$pid" > "$DOH_PID"
+    sleep 2
+    kill -0 "$pid" 2>/dev/null
+}
+
+cmd_doh_start() {
+    [ -x "$DOH_BIN" ] || die "dnscrypt-proxy is not installed: use Components -> dnscrypt-proxy"
+    providers=$(doh_normalize "$(conf_get DOH_PROVIDERS)")
+    doh_stop_proc
+    mkrun
+    want6=0
+    doh_v6_loopback && want6=1
+    if ! doh_start_proxy "$providers" "$want6"; then
+        rm -f "$DOH_PID"
+        if [ "$want6" = 1 ]; then
+            mlog ctl WARN "dnscrypt-proxy did not start with IPv6 loopback; retrying with IPv4 only"
+            doh_start_proxy "$providers" 0 || { rm -f "$DOH_PID"; tail -n 3 "$DOH_LOG" 2>/dev/null | while read -r l; do mlog ctl ERROR "dnscrypt-proxy: $l"; done; die "dnscrypt-proxy exited at startup; see the Logs tab (filter Control)"; }
+        else
+            tail -n 3 "$DOH_LOG" 2>/dev/null | while read -r l; do mlog ctl ERROR "dnscrypt-proxy: $l"; done
+            die "dnscrypt-proxy exited at startup; see the Logs tab (filter Control)"
+        fi
+    fi
+    if ! doh_rules_add; then
+        doh_stop_proc
+        doh_rules_remove
+        die "could not redirect DNS on this kernel (nat/REDIRECT unavailable)"
+    fi
+    if [ "$(settings get global private_dns_mode 2>/dev/null)" != off ]; then
+        settings put global private_dns_mode off >/dev/null 2>&1
+        mlog ctl INFO "Private DNS turned off so DNS goes through the DoH proxy"
+    fi
+    nohup sh "$MODDIR/scripts/zapret-ctl.sh" doh-watch >/dev/null 2>&1 </dev/null &
+    echo "$!" > "$DOH_WATCH_PID"
+    cmd_set DOH_ENABLED 1 >/dev/null
+    mlog ctl INFO "DoH proxy started (pid $pid, IPv6 $DOH_V6): $providers"
+    echo "DoH proxy running on 127.0.0.1:$DOH_PORT"
+}
+
+cmd_doh_stop() {
+    doh_stop_proc
+    doh_rules_remove
+    cmd_set DOH_ENABLED 0 >/dev/null 2>&1
+    mlog ctl INFO "DoH proxy stopped; DNS redirect removed"
+    echo "DoH proxy stopped"
+}
+
+cmd_doh_watch() {
+    mkrun
+    echo "$$" > "$DOH_WATCH_PID"
+    while :; do
+        sleep 10
+        if ! doh_running; then
+            mlog ctl ERROR "DoH proxy stopped unexpectedly; DNS redirect removed so DNS keeps working"
+            doh_rules_remove
+            rm -f "$DOH_PID" "$DOH_WATCH_PID"
+            cmd_set DOH_ENABLED 0 >/dev/null 2>&1
+            exit 0
+        fi
+    done
+}
+
+cmd_doh_status() {
+    echo "doh_running=$(doh_running && echo 1 || echo 0)"
+    echo "doh_enabled=$(conf_get DOH_ENABLED)"
+    echo "doh_auto_start=$(conf_get DOH_AUTO_START)"
+    echo "doh_providers=$(doh_normalize "$(conf_get DOH_PROVIDERS)")"
+    echo "doh_redirect=$(doh_redirect_active)"
+    echo "doh_queries=$(doh_queries)"
+    echo "doh_binary=$([ -x "$DOH_BIN" ] && echo yes || echo no)"
+    echo "doh_version=$(cat "$RUN_DIR/dnscrypt.version" 2>/dev/null)"
+    echo "doh_port=$DOH_PORT"
+    echo "doh_ipv6=$(doh_v6_loopback && echo 1 || echo 0)"
+}
+
+dns_doh() {
+    u=$(awk -F'|' -v i="$1" '$1==i {print $3; exit}' "$DOH_STAMPS" 2>/dev/null)
+    [ -n "$u" ] || return 1
+    echo "$u"
+}
+
+dns_dot() {
+    d=$(awk -F'|' -v i="$1" '$1==i {print $4; exit}' "$DOH_STAMPS" 2>/dev/null)
+    [ -n "$d" ] || return 1
+    echo "$d"
+}
+
+dns_ids_all() {
+    awk -F'|' '!/^#/ && NF>=5 {printf "%s ", $1}' "$DOH_STAMPS" 2>/dev/null
+}
+
+cmd_dns_providers() {
+    awk -F'|' '!/^#/ && NF>=5 {print $1"|"$2"|"$3"|"$4}' "$DOH_STAMPS" 2>/dev/null
+}
+
+cmd_dns_status() {
+    mode=$(settings get global private_dns_mode 2>/dev/null)
+    host=$(settings get global private_dns_specifier 2>/dev/null)
+    echo "private_dns_mode=${mode:-unset}"
+    echo "private_dns_host=${host:-}"
+    cmd_doh_status
+}
+
+cmd_dns_test() {
+    list="${2:-$(dns_ids_all)}"
+    tmp="$RUN_DIR/dns-test"
+    rm -rf "$tmp"
+    mkdir -p "$tmp"
+    for p in $list; do
+        case "$p" in *[!A-Za-z0-9._-]*) continue ;; esac
+        (
+            url=$(dns_doh "$p") || { echo "$p|0|unknown provider" > "$tmp/$p"; exit 0; }
+            out=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --connect-timeout 3 --max-time 6 \
+                "$url?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB" 2>/dev/null)
+            code=${out%% *}
+            t=${out#* }
+            case "$t" in ''|*[!0-9.]*) t=0 ;; esac
+            if [ "$code" = 200 ]; then
+                ms=$(awk "BEGIN{printf \"%d\", $t*1000}" 2>/dev/null)
+                echo "$p|${ms:-0}|ok" > "$tmp/$p"
+            else
+                echo "$p|0|failed" > "$tmp/$p"
+            fi
+        ) &
+    done
+    wait
+    for f in "$tmp"/*; do [ -f "$f" ] && cat "$f"; done | sort -t'|' -k3,3r -k2,2n
+    rm -rf "$tmp"
+}
+
+cmd_dns_apply() {
+    name="${2:-}"
+    if [ "$name" = off ]; then
+        settings put global private_dns_mode off
+        mlog ctl INFO "Private DNS turned off"
+        echo "Private DNS off"
+        return 0
+    fi
+    host=$(dns_dot "$name") || die "unknown provider: $name"
+    if doh_running || [ "$(conf_get DOH_ENABLED)" = 1 ]; then cmd_doh_stop >/dev/null; fi
+    settings put global private_dns_specifier "$host" || die "could not set the Private DNS host"
+    settings put global private_dns_mode hostname || die "could not enable Private DNS"
+    mlog ctl INFO "Private DNS set to $host ($name)"
+    echo "Private DNS: $host"
+}
+
+cmd_dns_fastest() {
+    best=""
+    for p in $(cmd_dns_test x "${2:-$(dns_ids_all)}" | awk -F'|' '$3=="ok" {print $1}'); do
+        if dns_dot "$p" >/dev/null 2>&1; then best=$p; break; fi
+    done
+    [ -n "$best" ] || die "no provider answered; Private DNS unchanged"
+    cmd_dns_apply x "$best"
+}
+
+cmd_backup_export() {
+    dest="${2:-/storage/emulated/0/Download/zapret-ksu-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
+    case "$dest" in
+        /*) ;;
+        *) die "destination must be a full path starting with /" ;;
+    esac
+    case "$dest" in *..*) die "destination may not contain .." ;; esac
+    mkrun
+    list=""
+    for p in config/zapret.conf config/blockcheck-domains.txt config/blockcheck-lists.txt zapret1/lists zapret2/lists zapret2/presets; do
+        [ -e "$MODDIR/$p" ] && list="$list $p"
+    done
+    [ -n "$list" ] || die "nothing to back up"
+    tmp="$RUN_DIR/backup.tar.gz"
+    (cd "$MODDIR" && bbx tar -czf "$tmp" $list) || die "could not create the archive"
+    mkdir -p "$(dirname "$dest")" && mv -f "$tmp" "$dest" || die "cannot write $dest"
+    mlog ctl INFO "backup exported to $dest"
+    echo "backup written to $dest ($(wc -c < "$dest") bytes)"
+}
+
+cmd_backup_import() {
+    src="${2:-}"
+    case "$src" in
+        /*) ;;
+        *) die "give the full path of the backup, starting with /" ;;
+    esac
+    [ -f "$src" ] || die "no such file: $src"
+    [ -L "$src" ] && die "symlinks are not allowed"
+    entries=$(bbx tar -tzf "$src" 2>/dev/null) || die "not a valid backup archive"
+    [ -n "$entries" ] || die "the backup is empty"
+    if bbx tar -tvzf "$src" 2>/dev/null | grep -q '^[lh]'; then
+        die "the backup contains links; refusing to restore it"
+    fi
+    bad=$(echo "$entries" | while IFS= read -r e; do
+        case "$e" in
+            /*|*..*) echo "$e" ;;
+            config/*|zapret1/lists/*|zapret2/lists/*|zapret2/presets/*) ;;
+            *) echo "$e" ;;
+        esac
+    done)
+    [ -z "$bad" ] || die "backup contains unexpected paths: $(echo "$bad" | head -n 1)"
+    tmpd="$RUN_DIR/restore"
+    rm -rf "$tmpd"
+    mkdir -p "$tmpd" || die "cannot create $tmpd"
+    bbx tar -xzf "$src" -C "$tmpd" || { rm -rf "$tmpd"; die "extraction failed"; }
+    if [ -f "$tmpd/config/zapret.conf" ] && ! sh -n "$tmpd/config/zapret.conf"; then
+        rm -rf "$tmpd"
+        die "the backup's zapret.conf has a syntax error; nothing restored"
+    fi
+    ts=$(date +%Y%m%d-%H%M%S)
+    [ -f "$CONF" ] && cp -f "$CONF" "$CONF.bak-$ts"
+    [ -d "$tmpd/config" ] && cp -f "$tmpd/config/"* "$MODDIR/config/" 2>/dev/null
+    for d in zapret1/lists zapret2/lists zapret2/presets; do
+        if [ -d "$tmpd/$d" ]; then
+            mkdir -p "$MODDIR/$d" && cp -rf "$tmpd/$d/." "$MODDIR/$d/"
+        fi
+    done
+    rm -rf "$tmpd"
+    mlog ctl INFO "backup restored from $src (previous config kept as zapret.conf.bak-$ts)"
+    echo "backup restored; previous config saved as zapret.conf.bak-$ts"
+    echo "restart the firewall to apply the restored settings"
+}
+
 cmd_interfaces() {
     for d in /sys/class/net/*; do
         n=$(basename "$d")
@@ -1005,6 +1585,22 @@ case "${1:-}" in
     set)           cmd_set "${2:-}" "${3-}" ;;
     strategies)    cmd_strategies "${2:-}" ;;
     interfaces)    cmd_interfaces ;;
+    apps-icon)     cmd_apps_icon "$@" ;;
+    apps-icons)    cmd_apps_icons "$@" ;;
+    dns-providers) cmd_dns_providers ;;
+    apps-diag)     cmd_apps_diag "$@" ;;
+    latest-versions) cmd_latest_versions ;;
+    dns-status)    cmd_dns_status ;;
+    dns-test)      cmd_dns_test "$@" ;;
+    dns-apply)     cmd_dns_apply "$@" ;;
+    dns-fastest)   cmd_dns_fastest "$@" ;;
+    doh-start)     cmd_doh_start ;;
+    doh-stop)      cmd_doh_stop ;;
+    doh-status)    cmd_doh_status ;;
+    doh-watch)     cmd_doh_watch ;;
+    apps-list)     cmd_apps_list ;;
+    backup-export) cmd_backup_export "$@" ;;
+    backup-import) cmd_backup_import "$@" ;;
     ipset)         cmd_ipset "${2:-}" "${3:-}" ;;
     fakes)         cmd_fakes "${2:-}" "${3:-}" "${4:-}" ;;
     file)          cmd_file "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;

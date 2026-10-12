@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0d12">
+  <meta name="description" content="zapret KSU control panel">
   <title>zapret KSU</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -13,7 +15,6 @@
     <span id="version" class="muted"></span>
   </header>
 
-  
   <section id="updateBanner" class="banner" hidden aria-live="polite">
     <div class="banner-head">
       <span class="spinner" aria-hidden="true"></span>
@@ -28,11 +29,11 @@
   </section>
 
   <main>
-    
+
     <section id="tab-home" class="tab is-active">
       <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
       <div class="hero" id="hero" data-state="unknown">
-        <div class="hero-label">Firewall</div>
+        <div class="hero-label">zapret</div>
         <div class="hero-state" id="heroState">Checking…</div>
         <div class="hero-sub" id="heroSub"></div>
         <button id="powerBtn" class="power" disabled>Start</button>
@@ -54,6 +55,7 @@
         <div class="stat"><span>Preset</span><b id="strategyVal">-</b></div>
         <div class="stat"><span>Backend</span><b id="backendVal">-</b></div>
         <div class="stat"><span>nfqws</span><b id="nfqwsVal">-</b></div>
+        <div class="stat stat-wide"><span>DNS</span><b id="dnsHomeVal">-</b></div>
       </div>
 
       <div class="card">
@@ -62,16 +64,28 @@
       </div>
     </section>
 
-    
     <section id="tab-settings" class="tab">
+      <nav class="menu" id="settingsMenu" aria-label="Settings sections">
+        <button class="menu-item" data-open="engine"><span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></span><span class="mi-text"><span class="mi-title">Engine and preset</span><span class="mi-sub" id="miEngine">-</span></span></button>
+        <button class="menu-item" data-open="network"><span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span><span class="mi-text"><span class="mi-title">Interception and bypass</span><span class="mi-sub" id="miNetwork">-</span></span></button>
+        <button class="menu-item" data-open="auto"><span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></span><span class="mi-text"><span class="mi-title">Startup and auto profile</span><span class="mi-sub" id="miAuto">-</span></span></button>
+        <button class="menu-item" data-open="dns"><span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><span class="mi-text"><span class="mi-title">Encrypted DNS</span><span class="mi-sub" id="miDns">-</span></span></button>
+        <button class="menu-item" data-open="tools"><span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 12l-9 9-3-3 9-9 1.7-1.7zM7 3l3 3-3 3-3-3 3-3z"/></svg></span><span class="mi-text"><span class="mi-title">Tools, backup and lists</span><span class="mi-sub" id="miTools">-</span></span></button>
+      </nav>
+      <div class="subhead" id="settingsHead" hidden>
+        <button id="settingsBack" class="btn small">Settings</button>
+        <strong id="settingsTitle"></strong>
+      </div>
+
       <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
-      <div class="card">
+      <div class="card" data-group="auto">
         <h2>Startup</h2>
         <label class="switch-row"><span>Start engine after boot</span><input id="s_AUTO_START" type="checkbox" data-bool></label>
+        <label class="switch-row"><span>Start DoH proxy after boot</span><input id="s_DOH_AUTO_START" type="checkbox" data-bool></label>
         <p class="hint">Starts the saved engine and strategy after boot. It ignores the auto network profile. Off by default.</p>
       </div>
 
-      <div class="card">
+      <div class="card" data-group="engine">
         <h2>Engine and preset</h2>
         <label class="field">
           <span>Engine</span>
@@ -86,7 +100,7 @@
         </label>
       </div>
 
-      <div class="card">
+      <div class="card" data-group="network">
         <h2>Interception</h2>
         <label class="field">
           <span>Firewall backend</span>
@@ -108,24 +122,28 @@
           <span>Web ports (TCP)</span>
           <input id="s_TCP_PORTS" type="text" autocomplete="off" spellcheck="false">
         </label>
+        <label class="field">
+          <span>Custom UDP ports <small>(WireGuard, Amnezia, other UDP protocols; ranges as a-b)</small></span>
+          <input id="s_UDP_PORTS" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. 51820 or 40000-40100">
+        </label>
         <label class="switch-row"><span>QUIC (UDP 443)</span><input id="s_QUIC_ENABLED" type="checkbox" data-bool></label>
       </div>
 
-      <div class="card" id="gfCard" hidden>
+      <div class="card" data-group="network" id="gfCard" hidden>
         <h2>Game filter <small>(zapret1)</small></h2>
         <label class="switch-row"><span>TCP ports 1024-65535</span><input id="s_GAME_FILTER_TCP" type="checkbox" data-bool></label>
         <label class="switch-row"><span>UDP ports 1024-65535</span><input id="s_GAME_FILTER_UDP" type="checkbox" data-bool></label>
         <p class="hint">Fills the strategy's game-filter placeholders with the full port range. Off by default.</p>
       </div>
 
-      <div class="card">
+      <div class="card" data-group="network">
         <h2>Bypass rules</h2>
         <label class="switch-row"><span>Skip private networks</span><input id="s_BYPASS_PRIVATE" type="checkbox" data-bool></label>
         <label class="switch-row"><span>Skip VPN tunnels</span><input id="s_BYPASS_VPN" type="checkbox" data-bool></label>
         <label class="switch-row"><span>Conntrack accounting</span><input id="s_CONNTRACK_ACCT" type="checkbox" data-bool></label>
       </div>
 
-      <div class="card" id="autoCard">
+      <div class="card" data-group="auto" id="autoCard">
         <h2>Auto network profile</h2>
         <label class="switch-row"><span>Enable auto network profile</span><input id="s_AUTO_NETWORK" type="checkbox" data-bool></label>
         <label class="switch-row"><span>Start the profile after boot</span><input id="s_AUTO_NETWORK_START" type="checkbox" data-bool></label>
@@ -147,7 +165,21 @@
         </div>
       </div>
 
-      <div class="card" id="advCard">
+      <div class="card" data-group="network" id="appCard">
+        <h2>App filtering</h2>
+        <label class="field">
+          <span>Mode</span>
+          <select id="s_APP_MODE">
+            <option value="disabled">Disabled (all apps)</option>
+            <option value="include">Only selected apps</option>
+            <option value="exclude">Bypass selected apps</option>
+          </select>
+        </label>
+        <div class="actions"><button id="appsBtn" class="btn wide">Choose apps (<span id="appsSelected">0</span> selected)</button></div>
+        <p class="hint">Apps are matched by their Android UID, so this works for outgoing traffic only. Replies from the internet can't be tied to an app and are not filtered.</p>
+      </div>
+
+      <div class="card" data-group="tools" id="advCard">
         <h2>Advanced</h2>
         <label class="switch-row"><span>Back up lists before saving</span><input id="s_BACKUP_LISTS" type="checkbox" data-bool></label>
         <label class="switch-row"><span>Write the log file</span><input id="s_LOG_ENABLED" type="checkbox" data-bool></label>
@@ -165,13 +197,54 @@
           <label class="field"><span>Game fake packet <small>(nfqws1)</small></span><select id="fakeGame"></select></label>
           <div class="actions"><button id="fakesApplyBtn" class="btn wide">Apply fake packets</button></div>
         </div>
+        <div class="sub">
+          <h3>Backup</h3>
+          <p class="hint">Exports the settings, the lists and your presets to a .tar.gz on the phone. The default place is the Download folder.</p>
+          <div class="actions"><button id="backupExportBtn" class="btn wide">Export backup</button></div>
+          <label class="field"><span>Backup file to restore (full path)</span><input id="backupPath" type="text" autocomplete="off" spellcheck="false" placeholder="/storage/emulated/0/Download/zapret-ksu-backup-….tar.gz"></label>
+          <div class="actions"><button id="backupImportBtn" class="btn wide">Import backup</button></div>
+        </div>
         <div class="actions"><button id="openEditorBtn" class="btn primary wide">Open lists and strategy editor</button></div>
+      </div>
+
+      <div class="card" data-group="dns" id="dnsCard">
+        <h2>Local DoH proxy</h2>
+        <dl class="kv">
+          <dt>Proxy</dt><dd id="dohNow">-</dd>
+          <dt>Private DNS</dt><dd id="dnsNow">-</dd>
+        </dl>
+        <p class="hint">Routes DNS (port 53, IPv4 and IPv6) of every app through encrypted DoH servers, using dnscrypt-proxy on 127.0.0.1:5354. Private DNS is turned off while the proxy runs. Browsers with their own Secure DNS on use it instead and skip the proxy. With Secure DNS off, they use the proxy like every other app.</p>
+        <div class="sub">
+          <h3>Providers</h3>
+          <div class="check-list" id="dnsProviders"></div>
+          <div class="apps-tools prov-tools">
+            <button id="provBlock" class="btn small">Blocking only</button>
+            <button id="provAll" class="btn small">All</button>
+            <button id="provNone" class="btn small">None</button>
+          </div>
+          <p class="hint">Ticked providers are used together, and the fastest one answers first. "Blocking only" ticks the malware and ad blockers, without the ones that send your client subnet.</p>
+        </div>
+        <div class="actions">
+          <button id="dohToggleBtn" class="btn primary wide">Start DoH proxy</button>
+        </div>
+        <div class="sub">
+          <h3>Speed test</h3>
+          <div class="actions"><button id="dnsTestBtn" class="btn wide">Test speed</button></div>
+          <div class="check-list" id="dnsResults"></div>
+        </div>
+        <div class="sub">
+          <h3>Android Private DNS</h3>
+          <p class="hint">Alternative to the proxy. It encrypts DNS with DNS over TLS for every app. It cannot run together with the proxy.</p>
+          <div class="actions">
+            <button id="dnsFastestBtn" class="btn wide">Use fastest (Private DNS)</button>
+            <button id="dnsOffBtn" class="btn wide">Turn Private DNS off</button>
+          </div>
+        </div>
       </div>
 
       <p class="hint">Changes take effect when the firewall restarts. Applying restarts it automatically when it is running.</p>
     </section>
 
-    
     <section id="tab-blockcheck" class="tab">
       <div class="card">
         <h2>Blockcheck</h2>
@@ -221,15 +294,14 @@
         <p class="hint" id="bcResultsHint">Each row appears as soon as its check completes. The baseline row is the reference: no bypass.</p>
         <div class="table-wrap">
           <table class="results">
-            <thead><tr><th>#</th><th>Preset</th><th>Score</th><th>HTTP</th><th>TLS1.2</th><th>TLS1.3</th><th>QUIC</th><th></th></tr></thead>
-            <tbody id="bcRows"><tr><td colspan="8" class="muted">No results yet. Start Blockcheck.</td></tr></tbody>
+            <thead><tr><th>#</th><th>Preset</th><th>Score</th><th>HTTP</th><th>TLS1.2</th><th>TLS1.3</th><th>QUIC</th><th>RTT ms</th><th></th></tr></thead>
+            <tbody id="bcRows"><tr><td colspan="9" class="muted">No results yet. Start Blockcheck.</td></tr></tbody>
           </table>
         </div>
         <p class="hint">Score is passed probes out of the total. The baseline row shows what is blocked without any bypass. "Use" selects that strategy and its engine.</p>
       </div>
     </section>
 
-    
     <section id="tab-components" class="tab">
       <p class="lock-note" hidden>Blockcheck is running. This tab unlocks when it finishes.</p>
       <div class="card">
@@ -239,7 +311,10 @@
           <dt>nfqws2</dt><dd id="v_nfqws2">not installed</dd>
           <dt>Presets (nfqws2)</dt><dd id="v_presets">not installed</dd>
           <dt>Strategies (nfqws1)</dt><dd id="v_strategies">not installed</dd>
+          <dt>dnscrypt-proxy</dt><dd id="v_dnscrypt">not installed</dd>
         </dl>
+        <div class="actions"><button id="checkLatestBtn" class="btn wide">Check latest versions</button></div>
+        <div id="latestBox" class="latest-box"></div>
         <p class="hint" id="lastUpdate">No update run yet.</p>
       </div>
 
@@ -251,12 +326,12 @@
           <button id="updNfqws1Btn" class="btn">nfqws1</button>
           <button id="updPresetsBtn" class="btn">Presets</button>
           <button id="updStrategiesBtn" class="btn">Strategies</button>
+          <button id="updDnsBtn" class="btn">dnscrypt-proxy</button>
         </div>
         <p class="hint">Downloads come from the official zapret and zapret2 releases and the strategy repositories. The progress banner at the top shows each step, the bytes received, and the time taken. Downloads continue if you switch tabs.</p>
       </div>
     </section>
 
-    
     <section id="tab-logs" class="tab">
       <div class="log-toolbar">
         <div class="chips" role="group" aria-label="Filter">
@@ -279,7 +354,6 @@
     </section>
   </main>
 
-  
   <div id="editor" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Editor">
     <div class="ov-head">
       <button id="edClose" class="btn small">Close</button>
@@ -326,17 +400,40 @@
     </div>
   </div>
 
+  <div id="appsOverlay" class="overlay" hidden role="dialog" aria-modal="true" aria-label="Choose apps">
+    <div class="ov-head">
+      <button id="appsClose" class="btn small">Close</button>
+      <strong>Choose apps</strong>
+      <span class="muted" id="appsCount"></span>
+    </div>
+    <div class="ov-body ov-apps">
+      <input id="appsSearch" type="search" placeholder="Search by name or package" autocomplete="off" spellcheck="false">
+      <div class="apps-bar">
+        <label class="apps-toggle"><span>System apps</span><input id="appsShowSystem" type="checkbox"></label>
+        <div class="apps-tools">
+          <button id="appsAll" class="btn small">Select shown</button>
+          <button id="appsNone" class="btn small">Clear all</button>
+        </div>
+      </div>
+      <div id="appsList" class="app-scroller"><div id="appsSpacer"><div id="appsWin"></div></div></div>
+      <div class="apps-foot">
+        <span class="muted" id="appsPicked">0 selected</span>
+        <button id="appsSave" class="btn primary small">Save selection</button>
+      </div>
+    </div>
+  </div>
+
   <div class="savebar" id="savebar" hidden>
     <span class="muted">Unsaved changes</span>
     <button id="applyBtn" class="btn primary">Apply</button>
   </div>
 
   <nav class="bottom-nav" aria-label="Sections">
-    <button class="nav-btn is-active" data-tab="home">Home</button>
-    <button class="nav-btn" data-tab="settings">Settings</button>
-    <button class="nav-btn" data-tab="blockcheck">Blockcheck</button>
-    <button class="nav-btn" data-tab="components">Components</button>
-    <button class="nav-btn" data-tab="logs">Logs</button>
+    <button class="nav-btn is-active" data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg><span>Home</span></button>
+    <button class="nav-btn" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+    <button class="nav-btn" data-tab="blockcheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg><span>Blockcheck</span></button>
+    <button class="nav-btn" data-tab="components"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Components</span></button>
+    <button class="nav-btn" data-tab="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg><span>Logs</span></button>
   </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

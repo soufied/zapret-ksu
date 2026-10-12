@@ -1,5 +1,4 @@
 #!/system/bin/sh
-
 MODDIR="${0%/*}/.."
 . "$MODDIR/scripts/common.sh"
 
@@ -13,12 +12,12 @@ DONE=""
 STARTED="$(date +%s)"
 ERRORS=0
 
-ZAPRET_REC_VER="v72.13"
-STRAT_REC_VER="9503dc045133000af8075e066f09bb469008e530"
-ZAPRET1_URL="https://github.com/bol-van/zapret/releases/download/$ZAPRET_REC_VER/zapret-$ZAPRET_REC_VER.tar.gz"
+ZAPRET1_API="https://api.github.com/repos/bol-van/zapret/releases/latest"
+STRAT_API="https://api.github.com/repos/Flowseal/zapret-discord-youtube/commits/main"
+STRAT_REPO_URL="https://github.com/Flowseal/zapret-discord-youtube/archive"
 ZAPRET2_API="https://api.github.com/repos/bol-van/zapret2/releases/latest"
+DNSCRYPT_API="https://api.github.com/repos/DNSCRYPT/dnscrypt-proxy/releases/latest"
 ZAPRET2_STRAT_URL="https://git.zapret.moe/zapretdiscordyoutube/zapret2-youtube-discord/archive/main.tar.gz"
-FLOWSEAL_URL="https://github.com/Flowseal/zapret-discord-youtube/archive/$STRAT_REC_VER.zip"
 
 bb() {
     if [ -x "$BB" ]; then "$BB" "$@"; else "$@"; fi
@@ -106,17 +105,25 @@ asset_url() {
 }
 
 fetch_nfqws1() {
-    step nfqws1 "downloading zapret $ZAPRET_REC_VER"
-    dl "$ZAPRET1_URL" "$TMP/z1.tar.gz" || return 1
+    step nfqws1 "reading the latest zapret release"
+    dl "$ZAPRET1_API" "$TMP/release1.json" || return 1
+    tag=$(grep -o '"tag_name": *"[^"]*"' "$TMP/release1.json" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+    [ -n "$tag" ] || { fail nfqws1 "no tag_name in release metadata"; return 1; }
+    name="zapret-$tag.tar.gz"
+    url=$(asset_url "$TMP/release1.json" "$name")
+    [ -n "$url" ] || { fail nfqws1 "release $tag has no asset named $name"; return 1; }
+    mlog fetch INFO "nfqws1: latest release is $tag"
+    dl "$url" "$TMP/z1.tar.gz" || return 1
+    verify_archive "$TMP/z1.tar.gz" "$name" "$TMP/release1.json" || return 1
     extract_tgz "$TMP/z1.tar.gz" "$TMP/z1" || { fail nfqws1 "cannot extract archive"; return 1; }
     src=$(bb find "$TMP/z1" -path '*android-arm64/nfqws' -type f | head -n 1)
     if [ -z "$src" ]; then
-        fail nfqws1 "no android-arm64/nfqws in the $ZAPRET_REC_VER archive"
+        fail nfqws1 "no android-arm64/nfqws in the $tag archive"
         bb find "$TMP/z1" -name 'nfqws' -type f | head -n 10 | while read -r f; do mlog fetch INFO "nfqws1: found $f"; done
         return 1
     fi
     install_bin "$src" nfqws || return 1
-    mkrun && echo "$ZAPRET_REC_VER" > "$RUN_DIR/nfqws1.version"
+    mkrun && echo "$tag" > "$RUN_DIR/nfqws1.version"
     step_done nfqws1
 }
 
@@ -126,7 +133,8 @@ asset_digest() {
 
 verify_archive() {
     actual=$(bb sha256sum "$1" | cut -c1-64)
-    digest=$(asset_digest "$TMP/release.json" "$2")
+    json="${3:-$TMP/release.json}"
+    digest=$(asset_digest "$json" "$2")
     if [ -n "$digest" ]; then
         if [ "$digest" = "$actual" ]; then
             mlog fetch INFO "$STEP: $2 matches the GitHub asset digest"
@@ -216,19 +224,56 @@ fetch_presets() {
 }
 
 fetch_strategies() {
-    step strategies "downloading zapret1 strategies"
-    dl "$FLOWSEAL_URL" "$TMP/strategies.zip" || return 1
+    step strategies "reading the latest strategy commit"
+    dl "$STRAT_API" "$TMP/strat.json" || return 1
+    sha=$(grep -o '"sha": *"[0-9a-f]\{40\}"' "$TMP/strat.json" | head -n 1 | grep -o '[0-9a-f]\{40\}')
+    [ -n "$sha" ] || { fail strategies "no commit id in the repository metadata"; return 1; }
+    short=$(echo "$sha" | cut -c1-7)
+    mlog fetch INFO "strategies: latest commit on main is $short"
+    dl "$STRAT_REPO_URL/$sha.zip" "$TMP/strategies.zip" || return 1
     mkdir -p "$TMP/s" && bb unzip -q -o "$TMP/strategies.zip" -d "$TMP/s" || { fail strategies "cannot extract strategies"; return 1; }
     bat=$(bb find "$TMP/s" -maxdepth 3 -name '*.bat' | head -n 1)
     [ -n "$bat" ] || { fail strategies "no .bat strategies in archive"; return 1; }
     root=$(dirname "$bat")
     mkdir -p "$Z1_DIR" && cp -r "$root/." "$Z1_DIR/" || { fail strategies "cannot install strategies"; return 1; }
+    mkrun && echo "$short" > "$RUN_DIR/strategies.version"
     mlog fetch INFO "strategies: installed $(ls "$Z1_DIR"/*.bat 2>/dev/null | wc -l) .bat files"
     step_done strategies
 }
 
+persist_save() {
+    P=/data/adb/zapret-ksu-data
+    mkdir -p "$P/bin" "$P/run" 2>/dev/null || return 0
+    for d in bin zapret1 zapret2; do
+        [ -d "$MODDIR/$d" ] && cp -rf "$MODDIR/$d/." "$P/$d/" 2>/dev/null
+    done
+    for f in "$RUN_DIR"/*.version; do
+        [ -f "$f" ] && cp -f "$f" "$P/run/" 2>/dev/null
+    done
+    mlog fetch INFO "downloads saved to $P (kept across module updates)"
+}
+
 mkrun
 mkdir -p "$TMP" || { echo "cannot create $TMP" >&2; exit 1; }
+
+fetch_dnscrypt() {
+    step dnscrypt "reading the latest dnscrypt-proxy release"
+    dl "$DNSCRYPT_API" "$TMP/release-dc.json" || return 1
+    tag=$(grep -o '"tag_name": *"[^"]*"' "$TMP/release-dc.json" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+    [ -n "$tag" ] || { fail dnscrypt "no tag_name in release metadata"; return 1; }
+    name="dnscrypt-proxy-linux_arm64-$tag.tar.gz"
+    url=$(asset_url "$TMP/release-dc.json" "$name")
+    [ -n "$url" ] || { fail dnscrypt "release $tag has no asset named $name"; return 1; }
+    mlog fetch INFO "dnscrypt: latest release is $tag"
+    dl "$url" "$TMP/dc.tar.gz" || return 1
+    verify_archive "$TMP/dc.tar.gz" "$name" "$TMP/release-dc.json" || return 1
+    extract_tgz "$TMP/dc.tar.gz" "$TMP/dc" || { fail dnscrypt "cannot extract archive"; return 1; }
+    src=$(bb find "$TMP/dc" -name dnscrypt-proxy -type f | head -n 1)
+    [ -n "$src" ] || { fail dnscrypt "no dnscrypt-proxy binary in the $tag archive"; return 1; }
+    install_bin "$src" dnscrypt-proxy || return 1
+    mkrun && echo "$tag" > "$RUN_DIR/dnscrypt.version"
+    step_done dnscrypt
+}
 
 run() {
     "$1" || mlog fetch WARN "$1 did not complete"
@@ -239,20 +284,23 @@ case "$TARGET" in
     nfqws2)     run fetch_nfqws2 ;;
     presets)    run fetch_presets ;;
     strategies) run fetch_strategies ;;
+    dnscrypt)   run fetch_dnscrypt ;;
     all)
         run fetch_nfqws1
         run fetch_nfqws2
         run fetch_presets
         run fetch_strategies
+        run fetch_dnscrypt
         ;;
     *)
-        echo "usage: $0 {nfqws1|nfqws2|presets|strategies|all}" >&2
+        echo "usage: $0 {nfqws1|nfqws2|presets|strategies|dnscrypt|all}" >&2
         exit 2
         ;;
 esac
 
 rm -rf "$TMP"
 if [ "$ERRORS" -eq 0 ]; then
+    persist_save
     write_state ok "$TARGET" "update complete" ""
     mlog fetch INFO "update $TARGET complete in $(( $(date +%s) - STARTED )) s"
     exit 0
