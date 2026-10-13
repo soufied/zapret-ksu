@@ -30,6 +30,7 @@ sleep 20
 
 rotate_log
 mlog svc INFO "boot completed; checking startup options"
+sh "$CTL" network-clean boot >>"$LOG" 2>&1
 rm -f "$MODDIR/run/auto.wanted" "$MODDIR/run/auto.pid" "$MODDIR/run/auto.applied"
 
 AUTO_NETWORK=$(conf_value AUTO_NETWORK)

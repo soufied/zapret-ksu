@@ -409,7 +409,7 @@
       ? `${bcFmt(baseDns)}`
       : (running ? "waiting…" : "not measured");
     setText("bcDnsNote", S.bc.bc_dns || "-");
-    const best = others[0];
+    const best = others.find((l) => l.split("|")[8] === "");
     $("bcBestText").textContent = best ? `${best.split("|")[0]} · ${bcFmt(best)}` : (running ? "waiting for results…" : "-");
     $("bcTested").textContent = presets ? `${others.length} of ${presets} presets` : `${others.length} presets`;
     $("bcUseBestBtn").disabled = running || !best;
@@ -417,13 +417,15 @@
     $("bcSummary").hidden = !base && !best;
   }
 
+  const bcEffectiveEngine = () => $("bcEngine").value || engineInForm();
+
   function renderBlockcheck() {
     const b = S.bc || {};
     const running = b.bc_state === "running" || S.bcStarting === true;
     applyLock(running);
     const total = Number(b.bc_total) || 0;
     const done = Number(b.bc_done) || 0;
-    $("bcTargetsCard").hidden = engineInForm() !== "nfqws2";
+    $("bcTargetsCard").hidden = bcEffectiveEngine() !== "nfqws2";
     $("bcStartBtn").disabled = running;
     $("bcCancelBtn").disabled = !running;
     $("bcProgressCard").hidden = !(running || (b.bc_state && b.bc_state !== "idle"));
@@ -434,6 +436,7 @@
                              : (b.bc_message || ""));
 
     const rows = S.bcRows || [];
+    setText("bcResCount", rows.length ? `${rows.length} row${rows.length === 1 ? "" : "s"}` : "no results yet");
     renderSummary(rows, running);
     const tbody = $("bcRows");
     const key = rows.join("\n");
@@ -765,11 +768,12 @@
   async function startBlockcheck() {
     const n = $("bcCount").value;
     const dns = $("bcDns").value;
+    const eng = $("bcEngine").value;
     S.bcStarting = true;
     S.bc = { ...(S.bc || {}), bc_state: "running", bc_message: "starting…" };
     renderBlockcheck();
     try {
-      const r = await ctl(`blockcheck start ${n} ${dns}`);
+      const r = await ctl(`blockcheck start ${n} ${dns} ${eng}`);
       if (r.errno !== 0) {
         toast((r.stdout || r.stderr).trim() || "Blockcheck could not start", 6000, "err");
         return;
@@ -1229,6 +1233,11 @@
       S.update = parseKV(parts.update);
       S.bc = parseKV(parts.bc);
       S.bcRows = parts.bcres.split("\n").map((l) => l.trim()).filter(Boolean);
+      const bcState = parseKV(parts.bc).bc_state;
+      if (!S.bcRows.length && bcState && bcState !== "idle") {
+        const r = await ctl("bc-results");
+        S.bcRows = (r.stdout || "").split("\n").map((l) => l.trim()).filter(Boolean);
+      }
       S.logText = parts.log.replace(/\n+$/, "");
       renderStatus();
       renderUpdate();
@@ -1427,6 +1436,12 @@
   }
 
   $("powerBtn").addEventListener("click", togglePower);
+  $("netRestoreBtn").addEventListener("click", async () => {
+    const r = await ctl("emergency");
+    const ok = r.errno === 0;
+    toast(ok ? "Network restored: module rules, DNS redirect and engines removed" : ((r.stderr || r.stdout).trim() || "Restore failed; see Logs"), 5000, ok ? "ok" : "err");
+    await refresh();
+  });
   $("applyBtn").addEventListener("click", applySettings);
   $("copyLogsBtn").addEventListener("click", copyLogs);
   $("s_ENGINE").addEventListener("change", onEngineChange);
@@ -1447,6 +1462,7 @@
   }
 
   $("bcStartBtn").addEventListener("click", startBlockcheck);
+  $("bcEngine").addEventListener("change", renderBlockcheck);
   $("appsBtn").addEventListener("click", appsOpen);
   $("appsClose").addEventListener("click", () => { $("appsOverlay").hidden = true; });
   $("appsSearch").addEventListener("input", debounce(appsApplyFilter, 120));
@@ -1576,11 +1592,37 @@
     return dnsProviderList;
   }
 
+  function dnsGroup(title) {
+    const sec = document.createElement("section");
+    sec.className = "prov-group";
+    const head = document.createElement("header");
+    const name = document.createElement("b");
+    name.textContent = title;
+    const count = document.createElement("span");
+    count.className = "prov-count";
+    head.append(name, count);
+    const list = document.createElement("div");
+    list.className = "prov-list";
+    sec.append(head, list);
+    return { sec, list, count };
+  }
+
+  function dnsUpdateCounts() {
+    for (const sec of $("dnsProviders").querySelectorAll(".prov-group")) {
+      const boxes = sec.querySelectorAll("input");
+      const on = sec.querySelectorAll("input:checked").length;
+      sec.querySelector(".prov-count").textContent = `${on} of ${boxes.length} ticked`;
+    }
+  }
+
   async function dnsRenderProviders() {
     const box = $("dnsProviders");
     if (box.childElementCount || box.dataset.loading) return;
     box.dataset.loading = "1";
+    const v4 = dnsGroup("IPv4");
+    const v6 = dnsGroup("IPv6");
     for (const p of await dnsLoadProviders()) {
+      const g = p.doh.includes("[") ? v6 : v4;
       const label = document.createElement("label");
       const cb = document.createElement("input");
       cb.type = "checkbox";
@@ -1594,12 +1636,24 @@
       host.textContent = `${p.doh.replace(/^https:\/\//, "").replace(/:443/, "")}${p.dot ? "  · Private DNS ok" : ""}`;
       text.append(name, host);
       label.append(cb, text);
-      box.appendChild(label);
+      g.list.appendChild(label);
     }
+    for (const g of [v4, v6]) {
+      if (!g.list.childElementCount) {
+        const none = document.createElement("p");
+        none.className = "hint";
+        none.textContent = "No providers in this family.";
+        g.list.appendChild(none);
+      }
+      g.sec.dataset.family = g.sec === v6.sec ? "6" : "4";
+      box.appendChild(g.sec);
+    }
+    dnsUpdateCounts();
   }
 
   function dnsSetChecked(pred) {
     for (const c of $("dnsProviders").querySelectorAll("input")) c.checked = pred(c);
+    dnsUpdateCounts();
   }
 
   function dnsSelected() {
@@ -1750,61 +1804,69 @@
     $("spFoot").hidden = !text;
   }
 
-  async function dnsTest() {
-    const ids = dnsSelected();
-    if (!ids) {
-      toast("Tick at least one provider", 4000);
-      return;
-    }
-    const count = ids.split(" ").length;
-    dnsBusy(true, `Testing ${count} provider${count === 1 ? "" : "s"}, 3 queries each…`);
+  async function dnsRunJob(mode, ids) {
+    const count = ids ? ids.split(",").length : (await dnsLoadProviders()).length;
+    dnsBusy(true, mode === "best3"
+      ? `Testing all providers, 3 queries each…`
+      : `Testing ${count} provider${count === 1 ? "" : "s"}, 3 queries each…`);
     try {
-      const r = await ctl(`dns-test ${quote(ids)}`);
-      const rows = dnsParseRows(r.stdout);
-      if (!rows.length) {
-        toast((r.stderr || "No results").trim(), 5000);
-        return;
+      const start = await ctl(`dns-job start ${mode} ${ids}`);
+      if (start.errno !== 0 || !/started/.test(start.stdout)) {
+        toast((start.stderr || start.stdout).trim() || "The provider test could not start", 6000, "err");
+        return null;
       }
-      const providers = await dnsProviderMap();
-      const answering = dnsRenderRows(rows, providers);
-      setText("spSummary", `${answering} of ${rows.length} answered`);
-      const top = rows.find((x) => x.status !== "failed");
-      dnsSetFoot(top ? `Lowest ping: ${dnsShort((providers.get(top.id) || { label: top.id }).label)}, ${top.ms} ms` : "");
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const s = await ctl("dns-job status");
+        const state = (s.stdout.match(/^job_state=(\S+)/m) || [])[1];
+        if (state === "done") return dnsParseRows(s.stdout);
+        if (state === "error") {
+          const msg = s.stdout.split("\n").filter((l) => l && !l.includes("=") && !l.includes("|")).pop();
+          toast(msg || "The provider test failed; see Logs", 6000, "err");
+          return null;
+        }
+      }
+      toast("The provider test is still running; open this tab again later", 6000, "warn");
+      return null;
     } finally {
       dnsBusy(false);
     }
   }
 
-  async function dnsBest3() {
-    const providers = await dnsProviderMap();
-    dnsBusy(true, `Testing all ${providers.size} providers, 3 queries each…`);
-    toast("Finding the best 3 providers…", 0, "busy");
-    try {
-      const r = await ctl("dns-best3");
-      if (r.errno !== 0) {
-        hideToast();
-        toast((r.stderr || r.stdout).trim().split("\n").pop() || "Best 3 failed", 6000, "err");
-        return;
-      }
-      const rows = dnsParseRows(r.stdout);
-      const picked = rows.filter((x) => x.pick);
-      if (!picked.length) {
-        hideToast();
-        toast("No provider answered; DoH providers unchanged", 6000, "err");
-        return;
-      }
-      const chosen = new Set(picked.map((x) => x.id));
-      dnsSetChecked((c) => chosen.has(c.value));
-      const answering = dnsRenderRows(rows, providers);
-      setText("spSummary", `${answering} of ${rows.length} answered`);
-      const names = picked.map((x) => dnsShort((providers.get(x.id) || { label: x.id }).label));
-      dnsSetFoot(`Best 3 by ping, saved: ${names.join(", ")}`);
-      hideToast();
-      toast(`Best 3 saved: ${names.join(", ")}`, 5000, "ok");
-      await dnsRefresh();
-    } finally {
-      dnsBusy(false);
+  async function dnsTest() {
+    const ids = dnsSelected().split(" ").filter(Boolean).join(",");
+    if (!ids) {
+      toast("Tick at least one provider", 4000);
+      return;
     }
+    const rows = await dnsRunJob("test", ids);
+    if (!rows) return;
+    const providers = await dnsProviderMap();
+    const answering = dnsRenderRows(rows, providers);
+    setText("spSummary", `${answering} of ${rows.length} answered`);
+    const top = rows.find((x) => x.status !== "failed");
+    dnsSetFoot(top ? `Lowest ping: ${dnsShort((providers.get(top.id) || { label: top.id }).label)}, ${top.ms} ms` : "");
+  }
+
+  async function dnsBest3() {
+    const rows = await dnsRunJob("best3", "");
+    if (!rows) return;
+    const providers = await dnsProviderMap();
+    const picked = rows.filter((x) => x.pick);
+    if (!picked.length) {
+      toast("No provider answered; DoH providers unchanged", 6000, "err");
+      return;
+    }
+    const chosen = new Set(picked.map((x) => x.id));
+    dnsSetChecked((c) => chosen.has(c.value));
+    dnsRenderRows(rows, providers);
+    const answering = rows.filter((x) => x.status !== "failed").length;
+    setText("spSummary", `${answering} of ${rows.length} answered`);
+    const names = picked.map((x) => dnsShort((providers.get(x.id) || { label: x.id }).label));
+    dnsSetFoot(`Best 3 by ping, saved: ${names.join(", ")}`);
+    toast(`Best 3 saved: ${names.join(", ")}`, 5000, "ok");
+    await dnsRefresh();
   }
 
   async function dnsFastest() {
@@ -1838,7 +1900,7 @@
   $("dnsFastestBtn").addEventListener("click", dnsFastest);
   $("dnsOffBtn").addEventListener("click", dnsOff);
   $("dohToggleBtn").addEventListener("click", dohToggle);
-  $("dnsProviders").addEventListener("change", dnsSaveSelection);
+  $("dnsProviders").addEventListener("change", () => { dnsUpdateCounts(); dnsSaveSelection(); });
   $("provBlock").addEventListener("click", () => dnsSetChecked((c) => c.dataset.block === "1"));
   $("provAll").addEventListener("click", () => dnsSetChecked(() => true));
   $("provNone").addEventListener("click", () => dnsSetChecked(() => false));

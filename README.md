@@ -6,7 +6,7 @@ Primary target: KernelSU and KernelSU-Next (arm64). Magisk and APatch are suppor
 
 ## Install
 
-1. Flash `zapret-ksu-v1.2.1.zip` in the KernelSU manager and reboot.
+1. Flash `zapret-ksu-v1.2.2.zip` in the KernelSU manager and reboot.
 2. Open the WebUI, go to **Components** and tap **Update all**. This downloads nfqws, nfqws2, the zapret 2 presets, the zapret 1 strategies and dnscrypt-proxy.
 3. In **Settings → Engine and preset**, choose an engine and a preset or strategy.
 4. Tap **Start** on the **Home** tab.
@@ -17,6 +17,17 @@ Requirements: internet access for the first download, and `curl` on the phone (r
 
 - **nfqws2 (zapret 2, recommended)** uses the presets. Each preset is checked with `--dry-run` before it starts.
 - **nfqws1 (zapret 1)** uses the `.bat` strategies from zapret-discord-youtube. It also offers the game filter, ipset mode and fake-packet options.
+
+## Network safety
+
+Every firewall rule and DNS change the module makes is removed on each failure path, without a reboot:
+
+- **Blockcheck** cleans up when it finishes, fails, is cancelled, or is killed. A run that dies without its own cleanup is detected on the next status check and cleaned up then.
+- **Start** rolls back the firewall if the engine fails to start.
+- **DoH proxy:** if the proxy dies, its DNS redirect and Private DNS change are removed. If the proxy keeps running but DNS through it fails three checks in a row (about 30 seconds), the redirect is removed too.
+- **Watchdog:** while the firewall or the DNS redirect is active, a watchdog removes the firewall if no engine is running, and the redirect if the proxy is gone.
+- **Boot:** leftover state from before the boot is cleared at startup.
+- **Restore network now** (Home) removes everything the module added, stops the engines and the DoH proxy, and restores Private DNS. It only touches the module's own tables and chains, never Android's rules.
 
 ## Blockcheck
 

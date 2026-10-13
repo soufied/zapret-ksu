@@ -60,6 +60,7 @@ load_conf() {
     fi
     if [ "$LOG_ENABLED" = 0 ]; then ENGINE_OUT=/dev/null; else ENGINE_OUT="$LOG"; fi
     [ -n "${ZAPRET_OVERRIDE_STRATEGY:-}" ] && STRATEGY="$ZAPRET_OVERRIDE_STRATEGY"
+    [ -n "${ZAPRET_OVERRIDE_ENGINE:-}" ] && ENGINE="$ZAPRET_OVERRIDE_ENGINE"
     return 0
 }
 
@@ -682,6 +683,7 @@ cmd_start() {
     echo "$ENGINE" > "$RUN_DIR/active.engine"
     echo "$STRATEGY" > "$RUN_DIR/active.strategy"
     mlog ctl INFO "start complete"
+    ensure_safety
 }
 
 cmd_stop() {
@@ -897,6 +899,8 @@ cmd_blockcheck() {
             n="${2:-15}"
             case "$n" in ''|*[!0-9]*) die "preset count must be a number" ;; esac
             dns_opt="${3:-auto}"
+            eng_opt="${4:-}"
+            case "$eng_opt" in ""|nfqws1|nfqws2) ;; *) die "engine must be nfqws1 or nfqws2" ;; esac
             case "$dns_opt" in auto|doh|dot) ;; *) die "DNS option must be auto, doh or dot" ;; esac
             mkrun
             rm -f "$BC_RESULTS" "$RUN_DIR/blockcheck.raw"
@@ -907,7 +911,7 @@ cmd_blockcheck() {
                 stop_engines
                 sh "$FW" stop >/dev/null 2>&1
             fi
-            mlog ctl INFO "blockcheck requested (presets=$n, dns=$dns_opt)"
+            mlog ctl INFO "blockcheck requested (presets=$n, dns=$dns_opt, engine=${eng_opt:-config})"
             {
                 echo "engine=$(conf_get ENGINE)"
                 echo "state=running"
@@ -920,7 +924,7 @@ cmd_blockcheck() {
                 echo "started=$(date +%s)"
                 echo "updated=$(date +%s)"
             } > "$BC_STATE"
-            ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" "$dns_opt" >/dev/null 2>&1 </dev/null &
+            ZAPRET_IGNORE_PROFILE=1 ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" "$dns_opt" "$eng_opt" >/dev/null 2>&1 </dev/null &
             echo $! > "$BC_PID"
             echo "blockcheck started (pid $!)"
             ;;
@@ -932,16 +936,19 @@ cmd_blockcheck() {
                 kill "$(cat "$BC_PID")" 2>/dev/null
             fi
             rm -f "$BC_PID"
-            stop_engines
-            sh "$FW" stop >/dev/null 2>&1
+            network_clean "blockcheck cancelled" >/dev/null 2>&1
             mkrun
+            eng=$(sed -n 's/^engine=//p' "$BC_STATE" 2>/dev/null)
+            dnsn=$(sed -n 's/^dns=//p' "$BC_STATE" 2>/dev/null)
             {
+                echo "engine=$eng"
                 echo "state=cancelled"
                 echo "step="
                 echo "done=0"
                 echo "total=0"
                 echo "message=cancelled by user"
                 echo "was_active=$was"
+                echo "dns=$dnsn"
                 echo "started=$(date +%s)"
                 echo "updated=$(date +%s)"
             } > "$BC_STATE"
@@ -953,7 +960,7 @@ cmd_blockcheck() {
             echo "blockcheck cancelled"
             ;;
         apply)
-            best=$(grep -v '^__baseline' "$BC_RESULTS" 2>/dev/null | head -n 1 | cut -d'|' -f1)
+            best=$(grep -v '^__baseline' "$BC_RESULTS" 2>/dev/null | awk -F'|' '$9 == "" {print $1; exit}')
             [ -n "$best" ] || die "no Blockcheck result to apply; run Blockcheck first"
             eng=$(sed -n 's/^engine=//p' "$BC_STATE" 2>/dev/null)
             case "$eng" in nfqws1|nfqws2) ;; *) die "Blockcheck result has no engine recorded" ;; esac
@@ -965,6 +972,126 @@ cmd_blockcheck() {
             die "blockcheck subcommand must be start [N], cancel or apply"
             ;;
     esac
+}
+
+network_clean() {
+    why="${1:-manual}"
+    mlog ctl WARN "network clean ($why): removing module firewall rules and DNS redirect, stopping engines"
+    stop_engines
+    sh "$FW" stop >/dev/null 2>&1
+    doh_drop_dns
+    if [ -f "$SAFETY_PID" ]; then kill "$(cat "$SAFETY_PID")" 2>/dev/null; fi
+    rm -f "$SAFETY_PID" "$RUN_DIR/active.engine" "$RUN_DIR/active.strategy"
+    left=$(network_leftovers)
+    if [ -z "$left" ]; then
+        mlog ctl INFO "network clean: nothing from the module is left"
+    else
+        mlog ctl ERROR "network clean: still present:$left"
+    fi
+    [ -z "$left" ]
+}
+
+network_leftovers() {
+    l=""
+    sh "$FW" status >/dev/null 2>&1 && l="$l firewall"
+    nft list table ip "$DOH_NFT_TABLE" >/dev/null 2>&1 && l="$l dns-redirect(nft,v4)"
+    nft list table ip6 "$DOH_NFT_TABLE" >/dev/null 2>&1 && l="$l dns-redirect(nft,v6)"
+    for b in iptables-legacy iptables ip6tables; do
+        command -v "$b" >/dev/null 2>&1 || continue
+        $b -w 5 -t nat -S OUTPUT 2>/dev/null | grep -q "$DOH_IPT_CHAIN" && l="$l dns-redirect($b)"
+    done
+    doh_running && l="$l doh-proxy"
+    engine_running && l="$l engine"
+    echo "$l"
+}
+
+doh_drop_dns() {
+    doh_stop_proc
+    doh_rules_remove
+    rm -f "$RUN_DIR/doh-ips.txt" "$RUN_DIR/private-dns.cache"
+    doh_restore_private_dns
+    cmd_set DOH_ENABLED 0 >/dev/null 2>&1
+}
+
+dns_probe() {
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -s -o /dev/null --max-time 5 https://www.gstatic.com/generate_204 2>/dev/null
+    [ "$?" != 6 ]
+}
+
+cmd_safety_loop() {
+    mkrun
+    if [ -f "$SAFETY_PID" ] && [ "$(cat "$SAFETY_PID")" != "$$" ] && kill -0 "$(cat "$SAFETY_PID")" 2>/dev/null; then
+        exit 0
+    fi
+    echo "$$" > "$SAFETY_PID"
+    dns_fail=0
+    fw_fail=0
+    while :; do
+        sleep 10
+        if bc_busy; then
+            dns_fail=0
+            fw_fail=0
+            continue
+        fi
+        fw_on=0
+        sh "$FW" status >/dev/null 2>&1 && fw_on=1
+        dns_on=0
+        [ "$(doh_redirect_active)" = 1 ] && dns_on=1
+        if [ "$fw_on" = 0 ] && [ "$dns_on" = 0 ]; then
+            rm -f "$SAFETY_PID"
+            exit 0
+        fi
+        if [ "$fw_on" = 1 ] && ! engine_running; then
+            fw_fail=$((fw_fail + 1))
+            if [ "$fw_fail" -ge 2 ]; then
+                mlog ctl ERROR "safety: firewall rules are active but no engine runs; removing them so traffic is not held"
+                sh "$FW" stop >/dev/null 2>&1
+                fw_fail=0
+            fi
+        else
+            fw_fail=0
+        fi
+        if [ "$dns_on" = 1 ]; then
+            if ! doh_running; then
+                mlog ctl ERROR "safety: DoH proxy is not running; removing its DNS redirect"
+                doh_drop_dns
+                dns_fail=0
+            elif dns_probe; then
+                dns_fail=0
+            else
+                dns_fail=$((dns_fail + 1))
+                if [ "$dns_fail" -ge 3 ]; then
+                    mlog ctl ERROR "safety: DNS through the DoH proxy failed 3 checks in a row; removing the redirect so names resolve again"
+                    doh_drop_dns
+                    dns_fail=0
+                fi
+            fi
+        else
+            dns_fail=0
+        fi
+    done
+}
+
+ensure_safety() {
+    if [ -f "$SAFETY_PID" ] && kill -0 "$(cat "$SAFETY_PID")" 2>/dev/null; then
+        return 0
+    fi
+    nohup sh "$MODDIR/scripts/zapret-ctl.sh" safety-loop >/dev/null 2>&1 </dev/null &
+}
+
+cmd_emergency() {
+    if bc_busy; then
+        pkill -P "$(cat "$BC_PID")" 2>/dev/null
+        kill "$(cat "$BC_PID")" 2>/dev/null
+        rm -f "$BC_PID"
+    fi
+    set_wanted 0
+    network_clean "emergency"
+    if [ -f "$BC_STATE" ]; then
+        sed 's/^state=running/state=cancelled/' "$BC_STATE" > "$BC_STATE.tmp" && mv -f "$BC_STATE.tmp" "$BC_STATE"
+    fi
+    echo "network restored"
 }
 
 cmd_bc_status() {
@@ -987,8 +1114,10 @@ cmd_bc_status() {
     fi
     if [ "$st" = running ] && ! bc_busy && [ $(( $(date +%s) - ${updated:-0} )) -gt 20 ]; then
         st=error
-        msg="Blockcheck stopped unexpectedly; see zapret.log"
-        mlog ctl ERROR "$msg"
+        msg="Blockcheck stopped unexpectedly; network restored"
+        mlog ctl ERROR "Blockcheck stopped unexpectedly; cleaning up its firewall and DNS changes"
+        network_clean "blockcheck stopped unexpectedly" >/dev/null 2>&1
+        sed 's/^state=running/state=error/' "$BC_STATE" > "$BC_STATE.tmp" && mv -f "$BC_STATE.tmp" "$BC_STATE"
     fi
     now=$(date +%s)
     elapsed=0
@@ -1154,6 +1283,7 @@ DOH_TOML="$DOH_DIR/dnscrypt-proxy.toml"
 DOH_PID="$RUN_DIR/doh.pid"
 DOH_WATCH_PID="$RUN_DIR/doh-watch.pid"
 DOH_LOG="$RUN_DIR/doh.log"
+SAFETY_PID="$RUN_DIR/safety.pid"
 DOH_STAMPS="$MODDIR/config/doh-providers.txt"
 DOH_NFT_TABLE="zapret_doh"
 DOH_IPT_CHAIN="ZAPRET_DOH"
@@ -1195,7 +1325,7 @@ NFT
 
 doh_ipt_redirect() {
     $1 -w 5 -t nat -N "$DOH_IPT_CHAIN" 2>/dev/null
-    $1 -w 5 -t nat -F "$DOH_IPT_CHAIN" || return 1
+    $1 -w 5 -t nat -F "$DOH_IPT_CHAIN" 2>/dev/null || return 1
     $1 -w 5 -t nat -A "$DOH_IPT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports "$DOH_PORT" || return 1
     $1 -w 5 -t nat -A "$DOH_IPT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports "$DOH_PORT" || return 1
     $1 -w 5 -t nat -C OUTPUT -j "$DOH_IPT_CHAIN" 2>/dev/null || $1 -w 5 -t nat -I OUTPUT 1 -j "$DOH_IPT_CHAIN" || return 1
@@ -1396,6 +1526,7 @@ cmd_doh_start() {
     echo "$!" > "$DOH_WATCH_PID"
     cmd_set DOH_ENABLED 1 >/dev/null
     mlog ctl INFO "DoH proxy started (pid $pid, IPv6 $DOH_V6): $providers"
+    ensure_safety
     echo "DoH proxy running on 127.0.0.1:$DOH_PORT"
 }
 
@@ -1478,6 +1609,102 @@ dns_ids_all() {
 cmd_dns_providers() {
     awk -F'|' '!/^#/ && NF>=5 {print $1"|"$2"|"$3"|"$4}' "$DOH_STAMPS" 2>/dev/null
 }
+DNS_JOB_STATE="$RUN_DIR/dns-job.state"
+DNS_JOB_OUT="$RUN_DIR/dns-job.out"
+DNS_JOB_PID="$RUN_DIR/dns-job.pid"
+
+dns_job_running() {
+    [ "$(cat "$DNS_JOB_STATE" 2>/dev/null)" = running ] || return 1
+    [ -f "$DNS_JOB_PID" ] && kill -0 "$(cat "$DNS_JOB_PID")" 2>/dev/null
+}
+
+dns_job_fail() {
+    echo "error" > "$DNS_JOB_STATE"
+    echo "$1" > "$DNS_JOB_OUT"
+    mlog ctl ERROR "provider test: $1"
+    return 1
+}
+
+dns_job_work() {
+    mode="$1"
+    ids=$(echo "$2" | tr ',' ' ')
+    [ -n "$ids" ] || ids=$(dns_ids_all)
+    echo "running" > "$DNS_JOB_STATE"
+    [ -n "$ids" ] || dns_job_fail "no providers are listed in config/doh-providers.txt" || return 1
+    ranked=$(dns_ranked "$ids")
+    picks=""
+    if [ "$mode" = best3 ]; then
+        orgs=$(dns_org_map)
+        answering=$(echo "$ranked" | awk -F'|' '$3>0 {print $1}')
+        [ -n "$answering" ] || dns_job_fail "no provider answered; providers unchanged" || return 1
+        used=""
+        n=0
+        for pass in 1 2; do
+            for p in $answering; do
+                [ "$n" -ge 3 ] && break
+                case " $picks " in *" $p "*) continue ;; esac
+                org=$(echo "$orgs" | awk -F'|' -v i="$p" '$1==i {print $2; exit}')
+                if [ "$pass" = 1 ]; then
+                    case " $used " in *" $org "*) continue ;; esac
+                fi
+                picks="$picks $p"
+                used="$used $org"
+                n=$((n + 1))
+            done
+        done
+        picks=$(echo $picks)
+        csv=$(echo "$picks" | tr ' ' ',')
+        cmd_set DOH_PROVIDERS "$csv" >/dev/null || dns_job_fail "could not save the providers" || return 1
+        mlog ctl INFO "Best 3 DoH providers saved: $csv"
+    fi
+    {
+        echo "$ranked" | while IFS='|' read -r id avg ok tot st; do
+            [ -n "$id" ] || continue
+            pick=0
+            case " $picks " in *" $id "*) pick=1 ;; esac
+            echo "$id|$avg|$ok|$tot|$st|$pick"
+        done
+    } > "$DNS_JOB_OUT.tmp"
+    mv -f "$DNS_JOB_OUT.tmp" "$DNS_JOB_OUT"
+    echo "done" > "$DNS_JOB_STATE"
+    if [ "$mode" = best3 ] && doh_running; then
+        ( cmd_doh_stop >/dev/null 2>&1; cmd_doh_start >/dev/null 2>&1 ) || mlog ctl WARN "DoH proxy did not restart with the new providers"
+    fi
+    return 0
+}
+
+cmd_dns_job() {
+    case "${2:-}" in
+        start)
+            if dns_job_running; then
+                echo "a provider test is already running"
+                return 1
+            fi
+            mode="${3:-test}"
+            case "$mode" in test|best3) ;; *) die "mode must be test or best3" ;; esac
+            mkrun
+            rm -f "$DNS_JOB_OUT"
+            echo "running" > "$DNS_JOB_STATE"
+            nohup sh "$MODDIR/scripts/zapret-ctl.sh" dns-job run "$mode" "${4:-}" >/dev/null 2>&1 </dev/null &
+            echo "$!" > "$DNS_JOB_PID"
+            echo "started"
+            ;;
+        run) dns_job_work "${3:-test}" "${4:-}" ;;
+        status)
+            st=$(cat "$DNS_JOB_STATE" 2>/dev/null || echo idle)
+            if [ "$st" = running ] && [ -f "$DNS_JOB_PID" ] && ! dns_job_running; then
+                st=error
+                echo "error" > "$DNS_JOB_STATE"
+                echo "the provider test stopped unexpectedly" > "$DNS_JOB_OUT"
+            fi
+            echo "job_state=$st"
+            [ -f "$DNS_JOB_OUT" ] && cat "$DNS_JOB_OUT"
+            ;;
+        *) die "usage: dns-job start test|best3 [ids] | status" ;;
+    esac
+    return 0
+}
+
 cmd_dns_status() {
     mode=$(settings get global private_dns_mode 2>/dev/null)
     host=$(settings get global private_dns_specifier 2>/dev/null)
@@ -1541,49 +1768,7 @@ dns_org_map() {
     awk -F'|' '!/^#/ && NF>=5 { split($2, a, " "); print $1 "|" a[1] }' "$DOH_STAMPS" 2>/dev/null
 }
 
-cmd_dns_test() {
-    dns_ranked "${2:-$(dns_ids_all)}"
-}
 
-cmd_dns_best3() {
-    all=$(dns_ids_all)
-    [ -n "$all" ] || die "no DoH providers are listed in config/doh-providers.txt"
-    ranked=$(dns_ranked "$all")
-    answering=$(echo "$ranked" | awk -F'|' '$3>0 {print $1}')
-    [ -n "$answering" ] || die "no provider answered; DoH providers unchanged"
-    orgs=$(dns_org_map)
-    picks=""
-    used=""
-    n=0
-    for pass in 1 2; do
-        for p in $answering; do
-            [ "$n" -ge 3 ] && break
-            case " $picks " in *" $p "*) continue ;; esac
-            org=$(echo "$orgs" | awk -F'|' -v i="$p" '$1==i {print $2; exit}')
-            if [ "$pass" = 1 ]; then
-                case " $used " in *" $org "*) continue ;; esac
-            fi
-            picks="$picks $p"
-            used="$used $org"
-            n=$((n + 1))
-        done
-    done
-    picks=$(echo $picks)
-    csv=$(echo "$picks" | tr ' ' ',')
-    cmd_set DOH_PROVIDERS "$csv" >/dev/null || die "could not save the providers"
-    mlog ctl INFO "Best 3 DoH providers saved: $csv"
-    echo "$ranked" | while IFS='|' read -r id avg ok tot st; do
-        [ -n "$id" ] || continue
-        pick=0
-        case " $picks " in *" $id "*) pick=1 ;; esac
-        echo "$id|$avg|$ok|$tot|$st|$pick"
-    done
-    if doh_running; then
-        cmd_doh_stop >/dev/null 2>&1
-        cmd_doh_start >/dev/null
-    fi
-    echo "saved: $csv"
-}
 
 cmd_dns_apply() {
     rm -f "$RUN_DIR/private-dns.cache"
@@ -1738,10 +1923,9 @@ case "${1:-}" in
     dns-providers) cmd_dns_providers ;;
     latest-versions) cmd_latest_versions ;;
     dns-status)    cmd_dns_status ;;
-    dns-test)      cmd_dns_test "$@" ;;
+    dns-job)       cmd_dns_job "$@" ;;
     dns-apply)     cmd_dns_apply "$@" ;;
     dns-fastest)   cmd_dns_fastest "$@" ;;
-    dns-best3)     cmd_dns_best3 ;;
     doh-start)     cmd_doh_start ;;
     doh-stop)      cmd_doh_stop ;;
     doh-status)    cmd_doh_status ;;
@@ -1755,8 +1939,11 @@ case "${1:-}" in
     bc-lists)      cmd_bc_lists "${2:-}" "${3:-}" ;;
     bc-available)  cmd_bc_available ;;
     update)        cmd_update "${2:-}" ;;
-    blockcheck)    cmd_blockcheck "${2:-}" "${3:-}" "${4:-}" ;;
+    blockcheck)    cmd_blockcheck "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
     bc-report)     cmd_bc_report ;;
+    network-clean) network_clean "${2:-manual}" ;;
+    emergency)     cmd_emergency ;;
+    safety-loop)   cmd_safety_loop ;;
     bc-results)    bc_results ;;
     log)           if [ "${2:-}" = clear ]; then cmd_log_clear; else cmd_log "${2:-}"; fi ;;
     snapshot)      cmd_snapshot "${2:-}" ;;

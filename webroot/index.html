@@ -39,6 +39,12 @@
         <button id="powerBtn" class="power" disabled>Start</button>
       </div>
 
+      <div class="card net-safety">
+        <h2>Network safety</h2>
+        <p class="hint">Removes every firewall and DNS change the module made, stops the engines and the DoH proxy, and restores Private DNS. Use it if the network stops working.</p>
+        <button id="netRestoreBtn" class="btn wide">Restore network now</button>
+      </div>
+
       <div class="card" id="homeAuto" hidden>
         <h2>Auto network profile</h2>
         <dl class="kv">
@@ -270,6 +276,14 @@
           </select>
         </label>
         <label class="field">
+          <span>Engine to test</span>
+          <select id="bcEngine">
+            <option value="" selected>Same as Engine and preset</option>
+            <option value="nfqws1">nfqws1 (.bat strategies)</option>
+            <option value="nfqws2">nfqws2 (presets)</option>
+          </select>
+        </label>
+        <label class="field">
           <span>DNS during the run</span>
           <select id="bcDns">
             <option value="auto" selected>Auto (DoH/DoT when it adds domains)</option>
@@ -312,7 +326,7 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>Results</h2><span id="bcBest" class="muted"></span></div>
+        <div class="card-head"><h2>Results</h2><span id="bcResCount" class="muted"></span><span id="bcBest" class="muted"></span></div>
         <p class="hint">Each row appears as soon as its check completes. The baseline row is the reference: no bypass.</p>
         <div class="table-wrap">
           <table class="results">

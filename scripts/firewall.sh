@@ -274,7 +274,7 @@ ipt_family() {
     B="$1"
     F="$2"
     T="$B $IPT_WAIT -t mangle"
-    if [ "$F" = 6 ]; then PRIV="$NETS6_SP"; else PRIV="$NETS4_SP"; fi
+    if [ "$F" = 6 ]; then PRIV="$NETS6_SP"; DOHF="$DOH6"; else PRIV="$NETS4_SP"; DOHF="$DOH4"; fi
 
     if ! ipt_probe "$B"; then
         log "error: $B lacks the NFQUEUE target (kernel built without xt_NFQUEUE)"
@@ -311,7 +311,7 @@ ipt_family() {
             $T -A "$IPT_POST" -d "$n" -j RETURN || return 1
         done
     fi
-    for a in $DOH4; do
+    for a in $DOHF; do
         $T -A "$IPT_POST" -d "$a" -j RETURN || return 1
     done
     $T -A "$IPT_POST" -m mark --mark "$FWMARK/$FWMARK" -j RETURN || return 1
@@ -338,7 +338,7 @@ ipt_family() {
             $T -A "$IPT_PRE" -s "$n" -j RETURN || return 1
         done
     fi
-    for a in $DOH4; do
+    for a in $DOHF; do
         $T -A "$IPT_PRE" -s "$a" -j RETURN || return 1
     done
     $T -A "$IPT_PRE" -m mark --mark "$FWMARK/$FWMARK" -j RETURN || return 1

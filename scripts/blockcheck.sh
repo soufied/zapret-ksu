@@ -227,7 +227,13 @@ control_probe() {
 }
 
 engine_up() {
-    sh "$CTL" status 2>/dev/null | grep -q '^nfqws_running=1'
+    n=0
+    while [ "$n" -lt 8 ]; do
+        sh "$CTL" status 2>/dev/null | grep -q '^nfqws_running=1' && return 0
+        sleep 1
+        n=$((n + 1))
+    done
+    return 1
 }
 engine_status() {
     sh "$CTL" status 2>/dev/null | grep -E '^(nfqws_running|firewall_active|active_strategy)=' | tr '\n' ' '
@@ -334,7 +340,25 @@ probe_caps
 
 rm -f "$RUN_DIR/blockcheck.raw" "$BC_RESULTS"
 
+[ "${1:-}" = run ] && shift
+LIMIT="${1:-15}"
+case "$LIMIT" in ''|*[!0-9]*) fail_run "limit must be a number" ;; esac
+DNS_FORCE="${2:-auto}"
+case "$DNS_FORCE" in
+    auto|doh|dot) ;;
+    *) fail_run "DNS option must be auto, doh or dot" ;;
+esac
+if [ "$DNS_FORCE" != auto ] && ! dns_available "$DNS_FORCE"; then
+    case "$DNS_FORCE" in
+        doh) fail_run "DoH is forced, but dnscrypt-proxy or DoH providers are missing" ;;
+        dot) fail_run "DoT is forced, but no provider with a DoT host is configured" ;;
+    esac
+fi
+ENGINE_OPT="${3:-}"
+case "$ENGINE_OPT" in ""|nfqws1|nfqws2) ;; *) fail_run "engine must be nfqws1 or nfqws2" ;; esac
+
 ENGINE_NOW=$(sh "$CTL" dump | sed -n 's/^ENGINE=//p')
+[ -n "$ENGINE_OPT" ] && ENGINE_NOW="$ENGINE_OPT"
 case "$ENGINE_NOW" in
     nfqws1) STRAT_DIR="$Z1_DIR"; STRAT_GLOB='*.bat' ;;
     nfqws2) STRAT_DIR="$Z2_DIR/presets"; STRAT_GLOB='*.txt' ;;
@@ -357,21 +381,6 @@ if [ "$ENGINE_NOW" = nfqws2 ] && [ -s "$BC_LISTS" ]; then
     done < "$BC_LISTS"
     DOMAINS=$(echo $picked | tr ' ' '\n' | grep -v '^$' | sort -u | head -n 12 | tr '\n' ' ')
     [ -n "$DOMAINS" ] || fail_run "the chosen target lists contain no domains"
-fi
-
-[ "${1:-}" = run ] && shift
-LIMIT="${1:-15}"
-case "$LIMIT" in ''|*[!0-9]*) fail_run "limit must be a number" ;; esac
-DNS_FORCE="${2:-auto}"
-case "$DNS_FORCE" in
-    auto|doh|dot) ;;
-    *) fail_run "DNS option must be auto, doh or dot" ;;
-esac
-if [ "$DNS_FORCE" != auto ] && ! dns_available "$DNS_FORCE"; then
-    case "$DNS_FORCE" in
-        doh) fail_run "DoH is forced, but dnscrypt-proxy or DoH providers are missing" ;;
-        dot) fail_run "DoT is forced, but no provider with a DoT host is configured" ;;
-    esac
 fi
 
 WAS_ACTIVE="${ZAPRET_BC_RESTORE:-0}"
@@ -399,6 +408,7 @@ bc_log INFO "curl exit codes: 6 DNS, 7 refused, 28 timeout, 35 TLS handshake, 56
 main_log INFO "Blockcheck started: $count presets, log in the Blockcheck tab"
 
 restore_all() {
+    sh "$CTL" network-clean "blockcheck finished" >>"$LOG" 2>&1
     dns_restore
     app_filter_restore
 }
@@ -474,8 +484,8 @@ echo "$presets" | while IFS= read -r preset; do
     done_n=$((done_n + 1))
     write_state running "$preset" "$done_n" "$TOTAL" "testing $preset" "$WAS_ACTIVE"
     bc_log INFO "--- $preset ($done_n/$TOTAL) dns=$RUN_DNS"
-    if ! ZAPRET_OVERRIDE_STRATEGY="$preset" sh "$CTL" start >>"$LOG" 2>&1 || ! engine_up; then
-        bc_log WARN "$preset: engine did not come up"
+    if ! ZAPRET_OVERRIDE_ENGINE="$ENGINE_NOW" ZAPRET_IGNORE_PROFILE=1 ZAPRET_OVERRIDE_STRATEGY="$preset" sh "$CTL" start >>"$LOG" 2>&1 || ! engine_up; then
+        bc_log WARN "$preset: engine did not come up ($(engine_status))"
         measure_reset
         record "$preset" "engine did not start" "$RUN_DNS"
         sh "$CTL" stop >/dev/null 2>&1
@@ -497,7 +507,7 @@ if [ "$WAS_ACTIVE" = 1 ]; then
     sh "$CTL" start >>"$LOG" 2>&1
 fi
 
-best=$(grep -v '^__baseline' "$BC_RESULTS" 2>/dev/null | head -n 1 | cut -d'|' -f1)
+best=$(grep -v '^__baseline' "$BC_RESULTS" 2>/dev/null | awk -F'|' '$9 == "" {print $1; exit}')
 bc_log INFO "results (name|score|max|http|tls12|tls13|quic|avg_ms|note|dom_ok|dom_total|dns):"
 while IFS= read -r l; do bc_log INFO "  $l"; done < "$BC_RESULTS"
 bc_log INFO "finished in $(( $(date +%s) - STARTED )) s; best preset: ${best:-none}"

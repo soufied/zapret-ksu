@@ -546,3 +546,12 @@ table.results td.dns { font: 600 12px var(--mono); color: var(--primary); white-
 #bcSummary .kv dd { font-size: 13.5px; word-break: normal; overflow-wrap: anywhere; margin-top: 3px; }
 
 .nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+.net-safety .btn { width: 100%; margin-top: 12px; }
+
+.prov-group { display: grid; gap: 6px; margin-bottom: 12px; }
+.prov-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 0 4px; }
+.prov-group > header b { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.prov-count { font: 500 12px var(--mono); color: var(--muted); }
+.prov-list { display: grid; gap: 2px; }
+.actions + .field { margin-top: 14px; }
