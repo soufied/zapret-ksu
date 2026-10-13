@@ -1,4 +1,5 @@
-LOG="$MODDIR/zapret.log"
+#!/system/bin/sh
+LOG="${ZAPRET_LOG:-$MODDIR/zapret.log}"
 RUN_DIR="$MODDIR/run"
 LOG_MAX=524288
 MLOG_ECHO="${MLOG_ECHO:-1}"

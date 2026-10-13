@@ -105,13 +105,50 @@
   }
 
   let toastTimer = null;
-  function toast(msg, ms = 3200) {
+  function toastKind(msg) {
+    const s = String(msg);
+    if (/fail|could not|cannot|can't|error|invalid|refus|unknown|not installed|no such|no provider|larger than|too large|not valid/i.test(s)) return "err";
+    if (/tick|type the|give the|must|locked|already running|unchanged|pick /i.test(s)) return "warn";
+    if (/saved|done|complete|started|selected|cleared|restored|deleted|copied|created|imported|turned|set to|applied|restarted|written|finished|updated|backup|changed|ready/i.test(s)) return "ok";
+    return "info";
+  }
+  const TOAST_ICON = { ok: "✓", warn: "!", err: "✕", info: "i" };
+  function hideToast() {
+    clearTimeout(toastTimer);
+    $("toast").classList.remove("show");
+  }
+  function toast(msg, ms = 3200, kind) {
     if (!msg || !String(msg).trim()) return;
+    const k = kind || toastKind(msg);
     const el = $("toast");
-    el.textContent = msg;
+    el.dataset.kind = k;
+    el.innerHTML = "";
+    const icon = document.createElement("span");
+    icon.className = k === "busy" ? "t-ic spin" : "t-ic";
+    icon.setAttribute("aria-hidden", "true");
+    if (k !== "busy") icon.textContent = TOAST_ICON[k] || "i";
+    const body = document.createElement("div");
+    body.className = "t-body";
+    const text = document.createElement("div");
+    text.className = "t-msg";
+    text.textContent = String(msg).trim();
+    body.appendChild(text);
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "t-close";
+    close.setAttribute("aria-label", "Dismiss");
+    close.textContent = "×";
+    close.addEventListener("click", hideToast);
+    el.append(icon, body, close);
+    if (ms > 0) {
+      const bar = document.createElement("i");
+      bar.className = "t-timer";
+      bar.style.animationDuration = `${ms}ms`;
+      el.appendChild(bar);
+    }
     el.classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove("show"), ms);
+    if (ms > 0) toastTimer = setTimeout(hideToast, ms);
   }
 
   function setText(id, value) {
@@ -348,21 +385,33 @@
       const note = sec.querySelector(".lock-note");
       if (note) note.hidden = !running;
     }
+    for (const btn of document.querySelectorAll(".nav-btn")) {
+      if (LOCKED_TABS.includes(btn.dataset.tab)) btn.disabled = running;
+    }
     $("savebar").hidden = running || $("savebar").hidden;
     $("openEditorBtn").disabled = running;
   }
 
+  const dnsLabel = (d) => (d === "dot" ? "DoT" : d === "doh" ? "DoH" : "");
+
+  function bcFmt(line) {
+    const f = line.split("|");
+    return `${f[1]}/${f[2]} · ${f[9] || "-"}/${f[10] || "-"} domains · HTTP ${f[3]} · TLS1.2 ${f[4]} · TLS1.3 ${f[5]} · QUIC ${f[6]}`;
+  }
+
   function renderSummary(rows, running) {
     const base = rows.find((l) => l.split("|")[0] === "__baseline__");
-    const others = rows.filter((l) => l.split("|")[0] !== "__baseline__");
-    const fmt = (l) => {
-      const [, score, max, http, tls12, tls13, quic] = l.split("|");
-      return `${score}/${max}  (HTTP ${http} · TLS1.2 ${tls12} · TLS1.3 ${tls13} · QUIC ${quic})`;
-    };
-    $("bcBaseline").textContent = base ? fmt(base) : (running ? "measuring…" : "-");
+    const baseDns = rows.find((l) => l.split("|")[0] === "__baseline_enc__");
+    const others = rows.filter((l) => !l.startsWith("__baseline"));
+    const presets = Math.max(0, (Number(S.bc.bc_total) || 0) - 2);
+    $("bcBaseline").textContent = base ? bcFmt(base) : (running ? "measuring…" : "-");
+    $("bcBaselineDns").textContent = baseDns
+      ? `${bcFmt(baseDns)}`
+      : (running ? "waiting…" : "not measured");
+    setText("bcDnsNote", S.bc.bc_dns || "-");
     const best = others[0];
-    $("bcBestText").textContent = best ? `${best.split("|")[0]}  (${fmt(best).split("  ")[0]})` : (running ? "waiting for results…" : "-");
-    $("bcTested").textContent = `${others.length} of ${(Number(S.bc.bc_total) || 1) - 1} strategies`;
+    $("bcBestText").textContent = best ? `${best.split("|")[0]} · ${bcFmt(best)}` : (running ? "waiting for results…" : "-");
+    $("bcTested").textContent = presets ? `${others.length} of ${presets} presets` : `${others.length} presets`;
     $("bcUseBestBtn").disabled = running || !best;
     S.bcBest = best ? best.split("|")[0] : "";
     $("bcSummary").hidden = !base && !best;
@@ -370,7 +419,7 @@
 
   function renderBlockcheck() {
     const b = S.bc || {};
-    const running = b.bc_state === "running";
+    const running = b.bc_state === "running" || S.bcStarting === true;
     applyLock(running);
     const total = Number(b.bc_total) || 0;
     const done = Number(b.bc_done) || 0;
@@ -393,7 +442,7 @@
     tbody.innerHTML = "";
     if (rows.length === 0) {
       const tr = document.createElement("tr");
-      tr.innerHTML = '<td colspan="9" class="muted">No results yet. Start Blockcheck.</td>';
+      tr.innerHTML = '<td colspan="11" class="muted">No results yet. Start Blockcheck.</td>';
       tbody.appendChild(tr);
       setText("bcBest", "");
       return;
@@ -401,11 +450,12 @@
     let rank = 0;
     let bestName = "";
     for (const line of rows) {
-      const [name, score, max, http, tls12, tls13, quic, avg, note] = line.split("|");
-      const isBase = name === "__baseline__";
+      const [name, score, max, http, tls12, tls13, quic, avg, note, domOk, domTotal, dns] = line.split("|");
+      const isBase = name.startsWith("__baseline");
       const tr = document.createElement("tr");
-      if (isBase) tr.className = "base";
-      if (!isBase) {
+      if (isBase) {
+        tr.className = "base";
+      } else {
         rank += 1;
         if (rank === 1) { tr.className = "best"; bestName = name; }
       }
@@ -415,13 +465,14 @@
         td.textContent = text;
         return td;
       };
+      const label = name.startsWith("__baseline") ? "baseline" : name;
       tr.appendChild(cell(isBase ? "—" : String(rank)));
-      tr.appendChild(cell(isBase ? "baseline (no bypass)" : name, "name"));
+      tr.appendChild(cell(label, "name"));
+      tr.appendChild(cell(dns && dns !== "none" ? dnsLabel(dns) : "—", "dns"));
       tr.appendChild(cell(`${score}/${max}`));
-      tr.appendChild(cell(`${http}`));
-      tr.appendChild(cell(`${tls12}`));
-      tr.appendChild(cell(`${tls13}`));
-      tr.appendChild(cell(`${quic}`));
+      tr.appendChild(cell(`${domOk || "-"}/${domTotal || "-"}`));
+      tr.appendChild(cell(http, ""));
+      for (const v of [tls12, tls13, quic]) tr.appendChild(cell(v, v === "n/a" ? "muted" : ""));
       tr.appendChild(cell(isBase || avg === "0" || !avg ? "-" : `${avg}`));
       const td = document.createElement("td");
       if (!isBase && note === "") {
@@ -440,25 +491,18 @@
     setText("bcBest", bestName ? `best: ${bestName}` : "");
   }
 
-  async function loadAppCount() {
-    const n = (S.saved.APP_LIST || "").split(",").filter(Boolean).length;
-    setText("appsSelected", String(n));
-  }
-
-  // ---- App picker ----
-  // Virtual list: only the rows in view exist in the DOM, rows are reused while scrolling,
-  // and the selection lives in a Set, so the list stays smooth with hundreds of apps.
   const APP_ROW_H = 60;
   const APP_OVERSCAN = 6;
-  const appsAll = [];           // every app from the backend, sorted by label
-  let appsShown = [];           // after search and the system-app filter
-  const appsPicked = new Set(); // package names selected (across all apps, not just shown)
-  const appsPool = [];          // reusable row elements
+  const appsAll = [];
+  let appsShown = [];
+  const appsPicked = new Set();
+  const appsPool = [];
   let appsRaf = 0;
   let appsRenderedFirst = -1;
   let appsRenderedLast = -1;
 
-  const iconCache = new Map();  // pkg -> data URL ("" when the app has no usable icon)
+  const iconCache = new Map();
+  let iconsOn = false;
   const iconQueue = [];
   const iconPending = new Set();
   let iconActive = 0;
@@ -493,8 +537,6 @@
     return true;
   }
 
-  // Start from the saved selection. Entries saved as UIDs become package names;
-  // entries that match no installed app are kept so saving never drops them.
   function initPicked() {
     appsPicked.clear();
     const byUid = new Map(appsAll.map((a) => [a.uid, a.pkg]));
@@ -510,14 +552,15 @@
     initPicked();
     $("appsOverlay").hidden = false;
     $("appsSearch").value = "";
-    $("appsShowSystem").checked = false;   // system apps are hidden by default
+    $("appsShowSystem").checked = false;
+    $("appsIcons").checked = iconsOn;
     $("appsList").scrollTop = 0;
     appsApplyFilter();
   }
 
   async function appsOpen() {
     const had = appsAll.length > 0;
-    if (had) showAppsOverlay();              // instant: reuse the list already in memory
+    if (had) showAppsOverlay();
     else { $("appsOverlay").hidden = false; setText("appsCount", "Loading…"); }
     const ok = await loadApps();
     if (!ok) { if (!had) $("appsOverlay").hidden = true; return; }
@@ -600,18 +643,16 @@
       const row = makeAppRow();
       appsPool.push(row);
     }
-    // Fill exactly `count` pooled rows and attach them in order.
     for (let i = 0; i < count; i++) fillAppRow(appsPool[i], appsShown[first + i]);
     win.replaceChildren(...appsPool.slice(0, count));
     queueVisibleIcons(first, last);
   }
-  // Icons load only for rows in view, in batches of up to 8 per call, one call at a time.
-  // The queue is rebuilt on every scroll, so work for rows that scrolled away never piles up.
   const ICON_BATCH = 8;
   let iconInFlight = false;
 
   function queueVisibleIcons(first, last) {
     iconQueue.length = 0;
+    if (!iconsOn) return;
     for (let i = first; i < last; i++) {
       const a = appsShown[i];
       if (a && !iconCache.has(a.pkg) && !iconPending.has(a.pkg)) iconQueue.push(a.pkg);
@@ -645,7 +686,6 @@
       }
       for (const pkg of batch) {
         iconPending.delete(pkg);
-        // A failed call is not cached, so the icons are retried later.
         if (r.errno === 0) iconCache.set(pkg, got.get(pkg) || "");
       }
       if (r.errno === 0) {
@@ -724,17 +764,26 @@
 
   async function startBlockcheck() {
     const n = $("bcCount").value;
-    S.bc = { ...(S.bc || {}), bc_state: "running" };
+    S.bcStarting = true;
+    S.bc = { ...(S.bc || {}), bc_state: "running", bc_message: "starting…" };
     renderBlockcheck();
-    const r = await ctl(`blockcheck start ${n}`);
-    if (r.errno !== 0) {
-      S.bc = { ...S.bc, bc_state: "idle" };
-      renderBlockcheck();
-      toast((r.stdout || r.stderr).trim() || "Blockcheck could not start", 6000);
-      return;
+    try {
+      const r = await ctl(`blockcheck start ${n}`);
+      if (r.errno !== 0) {
+        toast((r.stdout || r.stderr).trim() || "Blockcheck could not start", 6000, "err");
+        return;
+      }
+      toast("Blockcheck started. Engines stopped; traffic is interrupted while it runs.", 5000);
+    } finally {
+      S.bcStarting = false;
+      await refresh();
     }
-    toast("Blockcheck started. Engines stopped; traffic is interrupted while it runs.", 5000);
-    await refresh();
+  }
+
+  async function copyReport() {
+    const r = await ctl("bc-report");
+    const ok = await copyText(r.stdout || r.stderr || "");
+    toast(ok ? "Blockcheck report copied" : "Copy failed", 4000);
   }
 
   async function cancelBlockcheck() {
@@ -1159,8 +1208,6 @@
 
   async function refresh() {
     if (S.inFlight || document.hidden) return;
-    // Heavy status polling competes with the app picker and icon loads: pause it while a
-    // full-screen overlay is open and check again later.
     if (modalOpen()) { schedule(); return; }
     S.inFlight = true;
     try {
@@ -1286,16 +1333,17 @@
     const values = parseKV(r.stdout);
     S.saved = values;
     renderSettings(values);
-    await loadAppCount();
+    loadAppCount();
     renderSettingsMenu();
-    await loadInterfaces(values.IFACE || "any");
-    await loadStrategies(values.ENGINE || "nfqws2", values.STRATEGY || "");
+    await Promise.all([
+      loadInterfaces(values.IFACE || "any"),
+      loadStrategies(values.ENGINE || "nfqws2", values.STRATEGY || ""),
+      (values.ENGINE || "nfqws2") === "nfqws1" ? loadZapret1Options() : null,
+      loadTargets(),
+      fillAutoStrategies("WIFI_ENGINE", "WIFI_STRATEGY", values.WIFI_STRATEGY || ""),
+      fillAutoStrategies("MOBILE_ENGINE", "MOBILE_STRATEGY", values.MOBILE_STRATEGY || ""),
+    ]);
     syncEngineSections();
-    if ((values.ENGINE || "nfqws2") === "nfqws1") await loadZapret1Options();
-    await loadTargets();
-    for (const [eng, st] of [["WIFI_ENGINE", "WIFI_STRATEGY"], ["MOBILE_ENGINE", "MOBILE_STRATEGY"]]) {
-      await fillAutoStrategies(eng, st, values[st] || "");
-    }
     updateSaveBar();
   }
 
@@ -1402,6 +1450,14 @@
   $("appsClose").addEventListener("click", () => { $("appsOverlay").hidden = true; });
   $("appsSearch").addEventListener("input", debounce(appsApplyFilter, 120));
   $("appsShowSystem").addEventListener("change", appsApplyFilter);
+  $("appsIcons").addEventListener("change", (e) => {
+    iconsOn = e.target.checked;
+    try { localStorage.setItem("zapret.icons", iconsOn ? "1" : "0"); } catch (_) {}
+    if (!iconsOn) iconQueue.length = 0;
+    appsRenderedFirst = -1;
+    renderAppsWindow();
+  });
+  try { iconsOn = localStorage.getItem("zapret.icons") === "1"; } catch (_) {}
   $("appsAll").addEventListener("click", () => {
     for (const a of appsShown) appsPicked.add(a.pkg);
     renderAppsWindow();
@@ -1459,6 +1515,7 @@
   $("clearLogsBtn").addEventListener("click", clearLogs);
   $("bcUseBestBtn").addEventListener("click", () => S.bcBest && usePreset(S.bcBest));
   $("bcCancelBtn").addEventListener("click", cancelBlockcheck);
+  $("bcReportBtn").addEventListener("click", copyReport);
   $("updAllBtn").addEventListener("click", () => startUpdate("all", "all components"));
   $("updNfqws2Btn").addEventListener("click", () => startUpdate("nfqws2", "nfqws2"));
   $("updNfqws1Btn").addEventListener("click", () => startUpdate("nfqws1", "nfqws1"));
@@ -1472,8 +1529,8 @@
 
   (async () => {
     showTab("home");
+    refresh();
     await loadSettingsFromDevice();
-    await refresh();
   })();
   const SETTINGS_TITLES = {
     engine: "Engine and preset",
@@ -1568,7 +1625,6 @@
       btn.classList.add("primary");
     }
     btn.disabled = v.doh_binary === "no" && !running;
-    // Show the saved provider choice the first time the card opens.
     if (!S.dnsSynced) {
       S.dnsSynced = true;
       const saved = new Set((v.doh_providers || "").split(/[ ,]+/).filter(Boolean));
@@ -1578,6 +1634,19 @@
     const now = mode === "hostname" ? `on · ${v.private_dns_host || "?"}` : mode;
     setText("dnsNow", now);
     setText("miDns", running ? "DoH proxy on" : now === "off" ? "off" : now);
+  }
+
+  let dnsSaveTimer = null;
+  function dnsSaveSelection() {
+    clearTimeout(dnsSaveTimer);
+    dnsSaveTimer = setTimeout(async () => {
+      const ids = dnsSelected().split(" ").filter(Boolean).join(",");
+      const r = await ctl(`set DOH_PROVIDERS ${ids}`);
+      if (r.errno !== 0) { toast((r.stderr || r.stdout).trim(), 6000, "err"); return; }
+      S.saved.DOH_PROVIDERS = ids;
+      const running = $("dohNow").textContent.startsWith("on");
+      toast(running ? "Providers saved. Restart the DoH proxy to apply them." : `${ids ? ids.split(",").length : 0} provider(s) saved`, 3000, "ok");
+    }, 400);
   }
 
   async function dohToggle() {
@@ -1604,20 +1673,80 @@
     }
   }
 
-  function dnsShowResults(out) {
+  const mk = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  const dnsShort = (label) => String(label || "").replace(/\s*\([^)]*\)\s*$/, "");
+
+  const dnsHost = (doh) => String(doh || "")
+    .replace(/^https:\/\//, "")
+    .replace(/:443(?=\/|$)/, "")
+    .replace(/\/dns-query.*$/, "");
+
+  function dnsParseRows(out) {
+    return out.split("\n").map((l) => l.trim()).filter(Boolean)
+      .map((l) => l.split("|"))
+      .filter((f) => f.length >= 5)
+      .map(([id, avg, ok, total, status, pick]) => ({
+        id, ms: Number(avg) || 0, ok: Number(ok) || 0, total: Number(total) || 0,
+        status, pick: pick === "1",
+      }));
+  }
+
+  async function dnsProviderMap() {
+    return new Map((await dnsLoadProviders()).map((p) => [p.id, p]));
+  }
+
+  function dnsRenderRows(rows, providers) {
     const box = $("dnsResults");
     box.innerHTML = "";
-    for (const line of out.split("\n").map((x) => x.trim()).filter(Boolean)) {
-      const [name, ms, status] = line.split("|");
-      const row = document.createElement("div");
-      row.className = "res-row";
-      const n = document.createElement("span");
-      n.textContent = name;
-      const v = document.createElement("span");
-      v.textContent = status === "ok" ? `${ms} ms` : status || "failed";
-      row.append(n, v);
-      box.appendChild(row);
-    }
+    const answering = rows.filter((r) => r.status !== "failed");
+    const fastest = answering.length ? Math.min(...answering.map((r) => r.ms)) : 0;
+    let rank = 0;
+    rows.forEach((r, i) => {
+      const p = providers.get(r.id);
+      const ok = r.status !== "failed";
+      const li = mk("li", `sp-row${r.pick ? " pick" : ""}`);
+      li.dataset.state = r.status;
+      li.style.setProperty("--i", String(Math.min(i, 12)));
+      if (ok) rank += 1;
+      li.appendChild(mk("span", "sp-rank", ok ? String(rank) : "–"));
+      const main = mk("div", "sp-main");
+      main.append(mk("b", "", p ? dnsShort(p.label) : r.id), mk("small", "", p ? dnsHost(p.doh) : r.id));
+      const tags = mk("div", "sp-tags");
+      tags.appendChild(mk("span", "sp-avail", `${r.ok}/${r.total}`));
+      if (r.pick) tags.appendChild(mk("em", "sp-pick", "best 3"));
+      const meter = mk("div", "sp-meter");
+      if (ok) {
+        li.dataset.speed = r.ms < 120 ? "fast" : r.ms < 300 ? "mid" : "slow";
+        const track = mk("div", "sp-track");
+        const fill = mk("i");
+        fill.style.width = `${Math.max(6, Math.round((fastest / Math.max(r.ms, 1)) * 100))}%`;
+        track.appendChild(fill);
+        meter.append(track, mk("span", "sp-ms", `${r.ms} ms`));
+      } else {
+        meter.appendChild(mk("span", "sp-ms sp-none", "no answer"));
+      }
+      li.append(main, tags, meter);
+      box.appendChild(li);
+    });
+    return answering.length;
+  }
+
+  function dnsBusy(on, text) {
+    $("dnsTestBtn").disabled = on;
+    $("dnsBest3Btn").disabled = on;
+    $("spProgress").hidden = !on;
+    if (text) setText("spProgressText", text);
+  }
+
+  function dnsSetFoot(text) {
+    setText("spFoot", text || "");
+    $("spFoot").hidden = !text;
   }
 
   async function dnsTest() {
@@ -1626,12 +1755,54 @@
       toast("Tick at least one provider", 4000);
       return;
     }
-    $("dnsTestBtn").disabled = true;
+    const count = ids.split(" ").length;
+    dnsBusy(true, `Testing ${count} provider${count === 1 ? "" : "s"}, 3 queries each…`);
     try {
       const r = await ctl(`dns-test ${quote(ids)}`);
-      dnsShowResults(r.stdout);
+      const rows = dnsParseRows(r.stdout);
+      if (!rows.length) {
+        toast((r.stderr || "No results").trim(), 5000);
+        return;
+      }
+      const providers = await dnsProviderMap();
+      const answering = dnsRenderRows(rows, providers);
+      setText("spSummary", `${answering} of ${rows.length} answered`);
+      const top = rows.find((x) => x.status !== "failed");
+      dnsSetFoot(top ? `Lowest ping: ${dnsShort((providers.get(top.id) || { label: top.id }).label)}, ${top.ms} ms` : "");
     } finally {
-      $("dnsTestBtn").disabled = false;
+      dnsBusy(false);
+    }
+  }
+
+  async function dnsBest3() {
+    const providers = await dnsProviderMap();
+    dnsBusy(true, `Testing all ${providers.size} providers, 3 queries each…`);
+    toast("Finding the best 3 providers…", 0, "busy");
+    try {
+      const r = await ctl("dns-best3");
+      if (r.errno !== 0) {
+        hideToast();
+        toast((r.stderr || r.stdout).trim().split("\n").pop() || "Best 3 failed", 6000, "err");
+        return;
+      }
+      const rows = dnsParseRows(r.stdout);
+      const picked = rows.filter((x) => x.pick);
+      if (!picked.length) {
+        hideToast();
+        toast("No provider answered; DoH providers unchanged", 6000, "err");
+        return;
+      }
+      const chosen = new Set(picked.map((x) => x.id));
+      dnsSetChecked((c) => chosen.has(c.value));
+      const answering = dnsRenderRows(rows, providers);
+      setText("spSummary", `${answering} of ${rows.length} answered`);
+      const names = picked.map((x) => dnsShort((providers.get(x.id) || { label: x.id }).label));
+      dnsSetFoot(`Best 3 by ping, saved: ${names.join(", ")}`);
+      hideToast();
+      toast(`Best 3 saved: ${names.join(", ")}`, 5000, "ok");
+      await dnsRefresh();
+    } finally {
+      dnsBusy(false);
     }
   }
 
@@ -1662,9 +1833,11 @@
   }
   $("settingsBack").addEventListener("click", () => showSettingsGroup(null));
   $("dnsTestBtn").addEventListener("click", dnsTest);
+  $("dnsBest3Btn").addEventListener("click", dnsBest3);
   $("dnsFastestBtn").addEventListener("click", dnsFastest);
   $("dnsOffBtn").addEventListener("click", dnsOff);
   $("dohToggleBtn").addEventListener("click", dohToggle);
+  $("dnsProviders").addEventListener("change", dnsSaveSelection);
   $("provBlock").addEventListener("click", () => dnsSetChecked((c) => c.dataset.block === "1"));
   $("provAll").addEventListener("click", () => dnsSetChecked(() => true));
   $("provNone").addEventListener("click", () => dnsSetChecked(() => false));

@@ -6,7 +6,7 @@ Primary target: KernelSU and KernelSU-Next (arm64). Magisk and APatch are suppor
 
 ## Install
 
-1. Flash `zapret-ksu-v1.1.2.zip` in the KernelSU manager and reboot.
+1. Flash `zapret-ksu-v1.2.0.zip` in the KernelSU manager and reboot.
 2. Open the WebUI, go to **Components** and tap **Update all**. This downloads nfqws, nfqws2, the zapret 2 presets, the zapret 1 strategies and dnscrypt-proxy.
 3. In **Settings → Engine and preset**, choose an engine and a preset or strategy.
 4. Tap **Start** on the **Home** tab.
@@ -20,7 +20,21 @@ Requirements: internet access for the first download, and `curl` on the phone (r
 
 ## Blockcheck
 
-Finds the preset that gets your blocked domains through. Each domain is checked over HTTP, TLS 1.2, TLS 1.3 and QUIC, once without bypass (baseline) and once per preset. Starting it stops the running engine and locks Home, Settings and Components until it finishes.
+Finds the preset that gets your blocked domains through. Starting it stops the running engine and locks Home, Settings and Components until it finishes.
+
+It runs in this order:
+
+1. **Plain baseline**: no bypass and no encrypted DNS. Each domain is checked over HTTP, TLS 1.2, TLS 1.3 and QUIC.
+2. **Encrypted-DNS baseline**: the same checks with no bypass, using DoH (or DoT when DoH is not available). If this reaches more domains than the plain baseline, every preset is tested with encrypted DNS on. Otherwise presets run on plain DNS.
+3. **Each preset**, up to the number chosen in the list.
+
+A domain counts as available when its HTTPS probe succeeds. Results fill in as each step finishes, sorted best-first, so you can see progress before the run ends. Results show the domains reached, each probe type, and whether encrypted DNS was used. n/a means the probe could not run. QUIC needs a curl build with HTTP/3: if the default curl has none, Blockcheck uses any HTTP/3 build found at Termux, `/system/xbin/curl`, or the KernelSU or Magisk bin paths, and logs which one it chose. Otherwise QUIC shows n/a. The log lists curl exit codes for failed probes (6 DNS, 7 refused, 28 timeout, 35 TLS handshake, 56 reset) so you can tell a real block from a tool problem.
+
+Blockcheck writes its own log to `run/blockcheck.log`, so `zapret.log` stays readable. Each preset line shows whether the engine came up, and each failed probe shows curl's own error text. **Copy report** in the Blockcheck tab copies the state, the results and that log.
+
+The app filter is switched off for the run. In include mode the engine only handles the listed apps, and Blockcheck's own curl is not one of them, so its results would not reflect the presets. The previous setting is restored when the run ends, including on cancel.
+
+Encrypted DNS is turned off again when Blockcheck finishes, and the previous Private DNS setting is restored. **Use** selects a preset but does not turn encrypted DNS on; do that yourself if the best row needs it.
 
 ## Startup
 
@@ -36,6 +50,8 @@ After boot the module waits 20 seconds, then tries to start up to 12 times, 10 s
 - **Skip private networks**, **Skip VPN tunnels** and **Conntrack accounting** reduce CPU use and avoid touching local or VPN traffic.
 - **App filtering** applies the bypass to all apps, only the selected apps, or all apps except the selected ones. Apps are matched by Android UID, so only outgoing traffic can be matched.
 - The app picker shows user apps by default. Turn on **System apps** to list the rest.
+- App icons are off by default. Turn on **Icons** in the picker to load them. Each icon is read from its APK, so the first load of a long list takes a while. Icons are cached once loaded, and only rows on screen are loaded.
+- Names in the picker come from `config/app-labels.txt`. To rename an app, add `package=Name` to `config/app-names.txt`; it overrides the built-in name.
 
 ## Encrypted DNS
 
@@ -44,7 +60,9 @@ The **Local DoH proxy** runs dnscrypt-proxy on `127.0.0.1:5354`. It redirects po
 - Private DNS is turned off while the proxy runs, because Private DNS bypasses port 53.
 - Apps with their own secure DNS (Chrome, Firefox) skip the proxy. With their secure DNS off, they use it like any other app.
 - If the proxy stops unexpectedly, the redirect is removed at once so DNS keeps working.
-- Pick providers in the card. **Blocking only** selects malware and ad blockers that don't forward your client subnet. Providers come from `config/doh-providers.txt`.
+- **Test speed** sends three DNS queries to each ticked provider and shows the ping, which is the TCP round trip with the DNS lookup excluded, so hostname and IP providers are compared fairly.
+- **Best 3** tests every provider, keeps the three that answer most often with the lowest ping, and saves them as your providers. It keeps at most one provider per operator, so the three are not three addresses of the same service. If fewer than three operators answer, the list is filled with another address of an operator that already answered.
+- Pick providers in the card. **Blocking only** selects malware and ad blockers that don't forward your client subnet. Providers come from `config/doh-providers.txt`. The ticked providers are saved as you change them. Restart the DoH proxy to apply a changed selection.
 - **Use fastest (Private DNS)** instead sets Android Private DNS (DoT) to the fastest provider with a DoT host. It cannot run together with the proxy.
 
 Home shows the active DNS mode: DoH with the provider count, DoT with the host name, or off.

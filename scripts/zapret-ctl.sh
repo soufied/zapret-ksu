@@ -18,7 +18,7 @@ NET_SYS="${ZAPRET_NET_SYS:-/sys/class/net}"
 AUTO_PID="$RUN_DIR/auto.pid"
 AUTO_WANTED="$RUN_DIR/auto.wanted"
 BC_STATE="$RUN_DIR/blockcheck.state"
-BC_CSV="$RUN_DIR/blockcheck.csv"
+BC_RESULTS="$RUN_DIR/blockcheck.results"
 BC_PID="$RUN_DIR/blockcheck.pid"
 
 die() {
@@ -691,6 +691,20 @@ cmd_stop() {
     mlog ctl INFO "stopped"
 }
 
+private_dns_cached() {
+    cache="$RUN_DIR/private-dns.cache"
+    now=$(date +%s)
+    if [ -f "$cache" ] && [ $(( now - $(sed -n 1p "$cache") )) -lt 30 ]; then
+        sed -n 2,3p "$cache"
+        return 0
+    fi
+    mode=$(settings get global private_dns_mode 2>/dev/null)
+    host=$(settings get global private_dns_specifier 2>/dev/null)
+    mkrun
+    printf '%s\nmode=%s\nhost=%s\n' "$now" "$mode" "$host" > "$cache"
+    printf 'mode=%s\nhost=%s\n' "$mode" "$host"
+}
+
 cmd_status() {
     load_conf
     echo "module_version=$(sed -n 's/^version=//p' "$MODDIR/module.prop")"
@@ -713,8 +727,9 @@ cmd_status() {
     for c in nfqws1 nfqws2 presets dnscrypt; do
         [ -f "$RUN_DIR/$c.version" ] && echo "${c}_version=$(cat "$RUN_DIR/$c.version")"
     done
-    echo "dns_mode=$(settings get global private_dns_mode 2>/dev/null)"
-    echo "dns_host=$(settings get global private_dns_specifier 2>/dev/null)"
+    dns=$(private_dns_cached)
+    echo "dns_mode=$(echo "$dns" | sed -n 's/^mode=//p')"
+    echo "dns_host=$(echo "$dns" | sed -n 's/^host=//p')"
     echo "doh_running=$(doh_running && echo 1 || echo 0)"
     echo "doh_count=$(doh_normalize "$(conf_get DOH_PROVIDERS)" | wc -w | tr -d ' ')"
     echo "presets_count=$(count_files "$Z2_DIR/presets" '*.txt')"
@@ -882,7 +897,7 @@ cmd_blockcheck() {
             n="${2:-15}"
             case "$n" in ''|*[!0-9]*) die "preset count must be a number" ;; esac
             mkrun
-            rm -f "$BC_CSV"
+            rm -f "$BC_RESULTS" "$RUN_DIR/blockcheck.raw"
             was=0
             if sh "$FW" status 2>/dev/null | grep -q '^firewall_active=1'; then was=1; fi
             if [ "$was" = 1 ] || engine_running; then
@@ -891,7 +906,19 @@ cmd_blockcheck() {
                 sh "$FW" stop >/dev/null 2>&1
             fi
             mlog ctl INFO "blockcheck requested (presets=$n)"
-            ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" >>"$LOG" 2>&1 </dev/null &
+            {
+                echo "engine=$(conf_get ENGINE)"
+                echo "state=running"
+                echo "step=starting"
+                echo "done=0"
+                echo "total=0"
+                echo "message=starting Blockcheck"
+                echo "was_active=$was"
+                echo "dns="
+                echo "started=$(date +%s)"
+                echo "updated=$(date +%s)"
+            } > "$BC_STATE"
+            ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" >/dev/null 2>&1 </dev/null &
             echo $! > "$BC_PID"
             echo "blockcheck started (pid $!)"
             ;;
@@ -924,8 +951,8 @@ cmd_blockcheck() {
             echo "blockcheck cancelled"
             ;;
         apply)
-            best=$(sed -n '2p' "$BC_CSV" 2>/dev/null | cut -d'|' -f1)
-            [ -n "$best" ] && [ "$best" != "__baseline__" ] || die "no Blockcheck result to apply; run Blockcheck first"
+            best=$(grep -v '^__baseline' "$BC_RESULTS" 2>/dev/null | head -n 1 | cut -d'|' -f1)
+            [ -n "$best" ] || die "no Blockcheck result to apply; run Blockcheck first"
             eng=$(sed -n 's/^engine=//p' "$BC_STATE" 2>/dev/null)
             case "$eng" in nfqws1|nfqws2) ;; *) die "Blockcheck result has no engine recorded" ;; esac
             cmd_set ENGINE "$eng" >/dev/null
@@ -939,7 +966,7 @@ cmd_blockcheck() {
 }
 
 cmd_bc_status() {
-    st=idle; step=""; done=0; total=0; msg=""; was=0; started=""; updated=""; eng=""
+    st=idle; step=""; done=0; total=0; msg=""; was=0; started=""; updated=""; eng=""; dnsn=""
     if [ -f "$BC_STATE" ]; then
         while IFS= read -r line; do
             case "$line" in
@@ -950,12 +977,13 @@ cmd_bc_status() {
                 message=*)    msg="${line#message=}" ;;
                 was_active=*) was="${line#was_active=}" ;;
                 engine=*)     eng="${line#engine=}" ;;
+                dns=*)        dnsn="${line#dns=}" ;;
                 started=*)    started="${line#started=}" ;;
                 updated=*)    updated="${line#updated=}" ;;
             esac
         done < "$BC_STATE"
     fi
-    if [ "$st" = running ] && ! bc_busy; then
+    if [ "$st" = running ] && ! bc_busy && [ $(( $(date +%s) - ${updated:-0} )) -gt 20 ]; then
         st=error
         msg="Blockcheck stopped unexpectedly; see zapret.log"
         mlog ctl ERROR "$msg"
@@ -970,99 +998,68 @@ cmd_bc_status() {
     echo "bc_message=$msg"
     echo "bc_elapsed=$elapsed"
     echo "bc_engine=$eng"
+    echo "bc_dns=$dnsn"
 }
 
 bbx() {
     if [ -n "$BB" ]; then "$BB" "$@"; else "$@"; fi
 }
 
-app_label() {
-    ov="$MODDIR/config/app-names.txt"
-    if [ -f "$ov" ]; then
-        o=$(sed -n "s/^$1=//p" "$ov" | head -n 1)
-        if [ -n "$o" ]; then echo "$o"; return 0; fi
-    fi
-    case "$1" in
-        com.google.android.youtube) echo "YouTube" ;;
-        app.morphe.android.youtube) echo "YouTube (Morphe)" ;;
-        app.revanced.android.youtube) echo "YouTube (ReVanced)" ;;
-        com.google.android.apps.youtube.music) echo "YouTube Music" ;;
-        app.morphe.android.apps.youtube.music) echo "YouTube Music (Morphe)" ;;
-        app.revanced.android.apps.youtube.music) echo "YouTube Music (ReVanced)" ;;
-        com.google.android.apps.youtube.kids) echo "YouTube Kids" ;;
-        com.instagram.android) echo "Instagram" ;;
-        com.twitter.android) echo "X" ;;
-        com.discord) echo "Discord" ;;
-        org.telegram.messenger) echo "Telegram" ;;
-        com.whatsapp) echo "WhatsApp" ;;
-        com.facebook.katana) echo "Facebook" ;;
-        com.facebook.orca) echo "Messenger" ;;
-        com.zhiliaoapp.musically) echo "TikTok" ;;
-        com.reddit.frontpage) echo "Reddit" ;;
-        com.spotify.music) echo "Spotify" ;;
-        com.netflix.mediaclient) echo "Netflix" ;;
-        com.snapchat.android) echo "Snapchat" ;;
-        com.linkedin.android) echo "LinkedIn" ;;
-        com.pinterest) echo "Pinterest" ;;
-        com.viber.voip) echo "Viber" ;;
-        com.vkontakte.android) echo "VK" ;;
-        com.valvesoftware.android.steam.community) echo "Steam" ;;
-        com.roblox.client) echo "Roblox" ;;
-        com.microsoft.teams) echo "Microsoft Teams" ;;
-        us.zoom.videomeetings) echo "Zoom" ;;
-        com.skype.raider) echo "Skype" ;;
-        com.google.android.gm) echo "Gmail" ;;
-        com.google.android.apps.maps) echo "Google Maps" ;;
-        com.google.android.apps.photos) echo "Google Photos" ;;
-        com.google.android.apps.messaging) echo "Messages" ;;
-        com.google.android.googlequicksearchbox) echo "Google" ;;
-        com.android.chrome) echo "Chrome" ;;
-        org.mozilla.firefox) echo "Firefox" ;;
-        com.android.vending) echo "Google Play Store" ;;
-        ru.yandex.searchplugin) echo "Yandex" ;;
-        com.amazon.mShop.android.shopping) echo "Amazon" ;;
-        com.ebay.mobile) echo "eBay" ;;
-        *)
-            last=${1##*.}
-            echo "$last" | tr '_-' '  ' | awk '{ print toupper(substr($0,1,1)) substr($0,2) }'
-            ;;
-    esac
+PKG="${ZAPRET_PKG_LIST:-/data/system/packages.list}"
+
+pkg_key() {
+    [ -f "$PKG" ] && ls -l "$PKG" 2>/dev/null | tr -s ' '
 }
 
 cmd_apps_list() {
-    PKG="${ZAPRET_PKG_LIST:-/data/system/packages.list}"
     mkrun
     CACHE="$RUN_DIR/apps.list"
     KEYF="$RUN_DIR/apps.key"
-    if [ -f "$PKG" ]; then key=$(ls -l "$PKG" 2>/dev/null | tr -s ' '); else key=""; fi
+    key=$(pkg_key)
     if [ -n "$key" ] && [ -f "$CACHE" ] && [ "$(cat "$KEYF" 2>/dev/null)" = "$key" ]; then
         cat "$CACHE"
         return 0
     fi
     USR="$RUN_DIR/user-packages.txt"
+    HAVE_USR=0
     if command -v pm >/dev/null 2>&1; then
         pm list packages -3 2>/dev/null | sed -n 's/^package://p' | tr -d '\r' | sort -u > "$USR"
         HAVE_USR=1
     else
         : > "$USR"
-        HAVE_USR=0
     fi
-    {
-        if [ -f "$PKG" ]; then
-            awk '$2>=10000 {print $1"|"$2}' "$PKG" | sort -u
-        elif command -v pm >/dev/null 2>&1; then
-            pm list packages -U 2>/dev/null | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\).*/\1|\2/p' | sort -u
-        else
-            die "no package list available (neither $PKG nor pm)"
-        fi | while IFS='|' read -r pkg uid; do
-            printf '%s|%s|%s\n' "$pkg" "$uid" "$(app_label "$pkg")"
-        done | awk -F'|' -v usr="$USR" -v have="$HAVE_USR" '
-            BEGIN { while ((getline l < usr) > 0) u[l] = 1; close(usr) }
-            { t = (have == "1" && !($1 in u)) ? "s" : "u"; print $0 "|" t }'
-    } > "$CACHE.tmp" && mv -f "$CACHE.tmp" "$CACHE"
+    LIST="$RUN_DIR/apps.raw"
+    if [ -f "$PKG" ]; then
+        awk '$2>=10000 {print $1"|"$2}' "$PKG" | sort -u > "$LIST"
+    elif [ "$HAVE_USR" = 1 ]; then
+        pm list packages -U 2>/dev/null | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\).*/\1|\2/p' | sort -u > "$LIST"
+    else
+        die "no package list available (neither $PKG nor pm)"
+    fi
+    awk -F'|' -v LIST="$LIST" -v USRF="$USR" -v HAVE="$HAVE_USR" \
+        -v LBL="$MODDIR/config/app-labels.txt" -v OVR="$MODDIR/config/app-names.txt" '
+        function fallback(p,  n) {
+            n = p; sub(/.*\./, "", n); gsub(/[_-]/, " ", n)
+            return toupper(substr(n, 1, 1)) substr(n, 2)
+        }
+        BEGIN {
+            while ((getline l < USRF) > 0) usr[l] = 1
+            for (k = 1; k <= 2; k++) {
+                f = (k == 1 ? LBL : OVR)
+                while ((getline l < f) > 0) {
+                    e = index(l, "=")
+                    if (e > 1) lab[substr(l, 1, e - 1)] = substr(l, e + 1)
+                }
+            }
+            while ((getline l < LIST) > 0) {
+                split(l, a, "|")
+                name = (a[1] in lab) ? lab[a[1]] : fallback(a[1])
+                t = (HAVE == "1" && !(a[1] in usr)) ? "s" : "u"
+                print a[1] "|" a[2] "|" name "|" t
+            }
+        }' > "$CACHE.tmp" && mv -f "$CACHE.tmp" "$CACHE"
     [ -n "$key" ] && echo "$key" > "$KEYF"
     cat "$CACHE"
-    return 0
 }
 
 cmd_latest_versions() {
@@ -1094,6 +1091,19 @@ apk_list() {
     bbx unzip -l "$1" 2>/dev/null | grep -o 'res/[^[:space:]]*'
 }
 
+apk_map() {
+    MAP="$RUN_DIR/apk.map"
+    key=$(pkg_key)
+    if [ -s "$MAP" ] && [ -n "$key" ] && [ "$(cat "$RUN_DIR/apk.key" 2>/dev/null)" = "$key" ]; then
+        return 0
+    fi
+    command -v pm >/dev/null 2>&1 || return 1
+    pm list packages -f 2>/dev/null | sed -n 's/^package:\(.*\)=\([^=]*\)$/\2|\1/p' > "$MAP.tmp" \
+        && mv -f "$MAP.tmp" "$MAP"
+    [ -n "$key" ] && echo "$key" > "$RUN_DIR/apk.key"
+    return 0
+}
+
 icon_one() {
     pkg="$1"
     case "$pkg" in
@@ -1106,11 +1116,10 @@ icon_one() {
         cat "$cache"
         return 0
     fi
-    command -v pm >/dev/null 2>&1 || return 0
-    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -n 1)
-    if [ -z "$apk" ] || [ ! -f "$apk" ]; then
-        return 0
-    fi
+    apk_map || return 0
+    apk=$(awk -F'|' -v p="$pkg" '$1==p {print $2; exit}' "$MAP")
+    
+    [ -n "$apk" ] && [ -f "$apk" ] || return 0
     entry=$(apk_icon_entry "$(apk_list "$apk")")
     if [ -z "$entry" ]; then
         : > "$cache"
@@ -1127,10 +1136,6 @@ icon_one() {
     cat "$cache"
 }
 
-cmd_apps_icon() {
-    icon_one "${2:-}"
-}
-
 cmd_apps_icons() {
     shift
     for pkg in "$@"; do
@@ -1138,19 +1143,6 @@ cmd_apps_icons() {
         [ -n "$r" ] && printf '%s|%s\n' "$pkg" "$r"
     done
     return 0
-}
-
-cmd_apps_diag() {
-    pkg="${2:-}"
-    echo "unzip available: $(bbx unzip -v >/dev/null 2>&1 && echo yes || echo no)"
-    echo "base64 available: $(command -v base64 >/dev/null 2>&1 && echo yes || (test -n "$BB" && echo busybox || echo no))"
-    echo "pm available: $(command -v pm >/dev/null 2>&1 && echo yes || echo no)"
-    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -n 1)
-    echo "apk: ${apk:-not found}"
-    if [ -n "$apk" ] && [ -f "$apk" ]; then
-        echo "res entries: $(apk_list "$apk" | wc -l)"
-        echo "icon entry: $(apk_icon_entry "$(apk_list "$apk")")"
-    fi
 }
 
 DOH_PORT=5354
@@ -1365,6 +1357,7 @@ doh_restore_private_dns() {
 }
 
 cmd_doh_start() {
+    rm -f "$RUN_DIR/private-dns.cache"
     [ -x "$DOH_BIN" ] || die "dnscrypt-proxy is not installed: use Components -> dnscrypt-proxy"
     providers=$(doh_normalize "$(conf_get DOH_PROVIDERS)")
     doh_stop_proc
@@ -1423,6 +1416,7 @@ doh_forget_ips() {
 }
 
 cmd_doh_stop() {
+    rm -f "$RUN_DIR/private-dns.cache"
     doh_stop_proc
     doh_rules_remove
     doh_forget_ips
@@ -1482,7 +1476,6 @@ dns_ids_all() {
 cmd_dns_providers() {
     awk -F'|' '!/^#/ && NF>=5 {print $1"|"$2"|"$3"|"$4}' "$DOH_STAMPS" 2>/dev/null
 }
-
 cmd_dns_status() {
     mode=$(settings get global private_dns_mode 2>/dev/null)
     host=$(settings get global private_dns_specifier 2>/dev/null)
@@ -1491,34 +1484,107 @@ cmd_dns_status() {
     cmd_doh_status
 }
 
-cmd_dns_test() {
-    list="${2:-$(dns_ids_all)}"
+DNS_SAMPLES=3
+DNS_PROBE_Q="AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+
+dns_bench_one() {
+    p="$1"
+    out="$2"
+    url=$(dns_doh "$p") || { echo "$p|0|0|$DNS_SAMPLES|failed" > "$out"; return 0; }
+    ok=0
+    sum=0
+    i=0
+    while [ "$i" -lt "$DNS_SAMPLES" ]; do
+        i=$((i + 1))
+        
+        r=$(curl -s -o /dev/null -w '%{http_code} %{time_namelookup} %{time_connect}' \
+            --connect-timeout 3 --max-time 5 "$url?dns=$DNS_PROBE_Q" 2>/dev/null)
+        set -- $r
+        code=${1:-0}
+        dns_t=${2:-0}
+        conn_t=${3:-0}
+        case "$dns_t$conn_t" in *[!0-9.]*) continue ;; esac
+        if [ "$code" = 200 ]; then
+            ms=$(awk "BEGIN{d=$conn_t-$dns_t; if (d<0) d=0; printf \"%d\", d*1000}" 2>/dev/null)
+            ok=$((ok + 1))
+            sum=$((sum + ${ms:-0}))
+        fi
+    done
+    avg=0
+    [ "$ok" -gt 0 ] && avg=$((sum / ok))
+    st=failed
+    [ "$ok" -gt 0 ] && st=partial
+    [ "$ok" -eq "$DNS_SAMPLES" ] && st=ok
+    echo "$p|$avg|$ok|$DNS_SAMPLES|$st" > "$out"
+}
+
+dns_bench_all() {
     tmp="$RUN_DIR/dns-test"
     rm -rf "$tmp"
     mkdir -p "$tmp"
-    for p in $list; do
-        case "$p" in *[!A-Za-z0-9._-]*) continue ;; esac
-        (
-            url=$(dns_doh "$p") || { echo "$p|0|unknown provider" > "$tmp/$p"; exit 0; }
-            out=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --connect-timeout 3 --max-time 6 \
-                "$url?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB" 2>/dev/null)
-            code=${out%% *}
-            t=${out#* }
-            case "$t" in ''|*[!0-9.]*) t=0 ;; esac
-            if [ "$code" = 200 ]; then
-                ms=$(awk "BEGIN{printf \"%d\", $t*1000}" 2>/dev/null)
-                echo "$p|${ms:-0}|ok" > "$tmp/$p"
-            else
-                echo "$p|0|failed" > "$tmp/$p"
-            fi
-        ) &
+    for p in $1; do
+        case "$p" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+        dns_bench_one "$p" "$tmp/$p" &
     done
     wait
-    for f in "$tmp"/*; do [ -f "$f" ] && cat "$f"; done | sort -t'|' -k3,3r -k2,2n
+    for f in "$tmp"/*; do [ -f "$f" ] && cat "$f"; done
     rm -rf "$tmp"
 }
 
+dns_ranked() {
+    dns_bench_all "$1" | sort -t'|' -k3,3nr -k2,2n
+}
+
+dns_org_map() {
+    awk -F'|' '!/^#/ && NF>=5 { split($2, a, " "); print $1 "|" a[1] }' "$DOH_STAMPS" 2>/dev/null
+}
+
+cmd_dns_test() {
+    dns_ranked "${2:-$(dns_ids_all)}"
+}
+
+cmd_dns_best3() {
+    all=$(dns_ids_all)
+    [ -n "$all" ] || die "no DoH providers are listed in config/doh-providers.txt"
+    ranked=$(dns_ranked "$all")
+    answering=$(echo "$ranked" | awk -F'|' '$3>0 {print $1}')
+    [ -n "$answering" ] || die "no provider answered; DoH providers unchanged"
+    orgs=$(dns_org_map)
+    picks=""
+    used=""
+    n=0
+    for pass in 1 2; do
+        for p in $answering; do
+            [ "$n" -ge 3 ] && break
+            case " $picks " in *" $p "*) continue ;; esac
+            org=$(echo "$orgs" | awk -F'|' -v i="$p" '$1==i {print $2; exit}')
+            if [ "$pass" = 1 ]; then
+                case " $used " in *" $org "*) continue ;; esac
+            fi
+            picks="$picks $p"
+            used="$used $org"
+            n=$((n + 1))
+        done
+    done
+    picks=$(echo $picks)
+    csv=$(echo "$picks" | tr ' ' ',')
+    cmd_set DOH_PROVIDERS "$csv" >/dev/null || die "could not save the providers"
+    mlog ctl INFO "Best 3 DoH providers saved: $csv"
+    echo "$ranked" | while IFS='|' read -r id avg ok tot st; do
+        [ -n "$id" ] || continue
+        pick=0
+        case " $picks " in *" $id "*) pick=1 ;; esac
+        echo "$id|$avg|$ok|$tot|$st|$pick"
+    done
+    if doh_running; then
+        cmd_doh_stop >/dev/null 2>&1
+        cmd_doh_start >/dev/null
+    fi
+    echo "saved: $csv"
+}
+
 cmd_dns_apply() {
+    rm -f "$RUN_DIR/private-dns.cache"
     name="${2:-}"
     if [ "$name" = off ]; then
         settings put global private_dns_mode off
@@ -1536,10 +1602,10 @@ cmd_dns_apply() {
 
 cmd_dns_fastest() {
     best=""
-    for p in $(cmd_dns_test x "${2:-$(dns_ids_all)}" | awk -F'|' '$3=="ok" {print $1}'); do
+    for p in $(dns_ranked "${2:-$(dns_ids_all)}" | awk -F'|' '$3>0 {print $1}'); do
         if dns_dot "$p" >/dev/null 2>&1; then best=$p; break; fi
     done
-    [ -n "$best" ] || die "no provider answered; Private DNS unchanged"
+    [ -n "$best" ] || die "no provider with a Private DNS host answered; Private DNS unchanged"
     cmd_dns_apply x "$best"
 }
 
@@ -1628,6 +1694,21 @@ cmd_log() {
     tail -n "$n" "$LOG"
 }
 
+cmd_bc_report() {
+    echo "=== zapret-ksu Blockcheck report ==="
+    echo "module_version=$(sed -n 's/^version=//p' "$MODDIR/module.prop")"
+    cmd_bc_status
+    echo "--- results: name|score|max|http|tls12|tls13|quic|avg_ms|note|dom_ok|dom_total|dns ---"
+    bc_results
+    echo "--- blockcheck.log ---"
+    if [ -f "$RUN_DIR/blockcheck.log" ]; then tail -n 400 "$RUN_DIR/blockcheck.log"; else echo "(no log yet)"; fi
+}
+
+bc_results() {
+    [ -f "$BC_RESULTS" ] && cat "$BC_RESULTS"
+    return 0
+}
+
 cmd_snapshot() {
     cmd_status
     echo "---UPDATE---"
@@ -1635,8 +1716,7 @@ cmd_snapshot() {
     echo "---BLOCKCHECK---"
     cmd_bc_status
     echo "---BCRESULTS---"
-    if [ -f "$BC_CSV" ]; then cat "$BC_CSV"
-    elif [ -f "$RUN_DIR/blockcheck.raw" ]; then cat "$RUN_DIR/blockcheck.raw"; fi
+    bc_results
     echo "---LOG---"
     cmd_log "${1:-200}"
 }
@@ -1652,15 +1732,14 @@ case "${1:-}" in
     set)           cmd_set "${2:-}" "${3-}" ;;
     strategies)    cmd_strategies "${2:-}" ;;
     interfaces)    cmd_interfaces ;;
-    apps-icon)     cmd_apps_icon "$@" ;;
     apps-icons)    cmd_apps_icons "$@" ;;
     dns-providers) cmd_dns_providers ;;
-    apps-diag)     cmd_apps_diag "$@" ;;
     latest-versions) cmd_latest_versions ;;
     dns-status)    cmd_dns_status ;;
     dns-test)      cmd_dns_test "$@" ;;
     dns-apply)     cmd_dns_apply "$@" ;;
     dns-fastest)   cmd_dns_fastest "$@" ;;
+    dns-best3)     cmd_dns_best3 ;;
     doh-start)     cmd_doh_start ;;
     doh-stop)      cmd_doh_stop ;;
     doh-status)    cmd_doh_status ;;
@@ -1674,10 +1753,10 @@ case "${1:-}" in
     bc-lists)      cmd_bc_lists "${2:-}" "${3:-}" ;;
     bc-available)  cmd_bc_available ;;
     update)        cmd_update "${2:-}" ;;
-    update-status) cmd_update_status ;;
     blockcheck)    cmd_blockcheck "${2:-}" "${3:-}" ;;
-    bc-status)     cmd_bc_status ;;
+    bc-report)     cmd_bc_report ;;
+    bc-results)    bc_results ;;
     log)           if [ "${2:-}" = clear ]; then cmd_log_clear; else cmd_log "${2:-}"; fi ;;
     snapshot)      cmd_snapshot "${2:-}" ;;
-    *)             echo "usage: $0 {status|start|stop|restart|dump|set K V|strategies [E]|update N|update-status|log [N]|snapshot [N]}" >&2; exit 2 ;;
+    *)             echo "usage: $0 {status|start|stop|restart|dump|set K V|strategies [E]|update N|log [N]|snapshot [N]}" >&2; exit 2 ;;
 esac
