@@ -246,10 +246,18 @@ dot_provider() {
     return 1
 }
 
+dns_available() {
+    case "$1" in
+        doh) [ -x "$DNSCRYPT_BIN" ] && [ -n "$(sh "$CTL" dump 2>/dev/null | sed -n 's/^DOH_PROVIDERS=//p')" ] ;;
+        dot) dot_provider >/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
 dns_pick_mode() {
-    if [ -x "$DNSCRYPT_BIN" ] && [ -n "$(sh "$CTL" dump 2>/dev/null | sed -n 's/^DOH_PROVIDERS=//p')" ]; then
+    if dns_available doh; then
         echo doh
-    elif dot_provider >/dev/null; then
+    elif dns_available dot; then
         echo dot
     fi
 }
@@ -354,6 +362,17 @@ fi
 [ "${1:-}" = run ] && shift
 LIMIT="${1:-15}"
 case "$LIMIT" in ''|*[!0-9]*) fail_run "limit must be a number" ;; esac
+DNS_FORCE="${2:-auto}"
+case "$DNS_FORCE" in
+    auto|doh|dot) ;;
+    *) fail_run "DNS option must be auto, doh or dot" ;;
+esac
+if [ "$DNS_FORCE" != auto ] && ! dns_available "$DNS_FORCE"; then
+    case "$DNS_FORCE" in
+        doh) fail_run "DoH is forced, but dnscrypt-proxy or DoH providers are missing" ;;
+        dot) fail_run "DoT is forced, but no provider with a DoT host is configured" ;;
+    esac
+fi
 
 WAS_ACTIVE="${ZAPRET_BC_RESTORE:-0}"
 
@@ -400,7 +419,11 @@ PLAIN_DOM=$M_DOM_OK
 PLAIN_SCORE=$M_SCORE
 bc_log INFO "baseline: $M_DOM_OK/$M_DOM_TOTAL domains available, score $M_SCORE/$M_MAX"
 
-DNS_MODE=$(dns_pick_mode)
+if [ "$DNS_FORCE" = auto ]; then
+    DNS_MODE=$(dns_pick_mode)
+else
+    DNS_MODE="$DNS_FORCE"
+fi
 USE_DNS=""
 DNS_LABEL=$(dns_label "$DNS_MODE")
 if [ -z "$DNS_MODE" ]; then
@@ -415,7 +438,10 @@ else
         ENC_SCORE=$M_SCORE
         dns_off
         bc_log INFO "baseline + $DNS_LABEL: $ENC_DOM/$M_DOM_TOTAL domains available, score $ENC_SCORE (plain DNS: $PLAIN_DOM, score $PLAIN_SCORE)"
-        if [ "$ENC_DOM" -gt "$PLAIN_DOM" ] || { [ "$ENC_DOM" -eq "$PLAIN_DOM" ] && [ "$ENC_SCORE" -gt "$PLAIN_SCORE" ]; }; then
+        if [ "$DNS_FORCE" != auto ]; then
+            USE_DNS="$DNS_MODE"
+            DNS_NOTE="$DNS_LABEL forced: $ENC_DOM vs $PLAIN_DOM domains available; presets run with it"
+        elif [ "$ENC_DOM" -gt "$PLAIN_DOM" ] || { [ "$ENC_DOM" -eq "$PLAIN_DOM" ] && [ "$ENC_SCORE" -gt "$PLAIN_SCORE" ]; }; then
             USE_DNS="$DNS_MODE"
             DNS_NOTE="$DNS_LABEL: $ENC_DOM vs $PLAIN_DOM domains available; presets run with it"
         else
@@ -423,6 +449,9 @@ else
         fi
     else
         dns_off
+        if [ "$DNS_FORCE" != auto ]; then
+            fail_run "$DNS_LABEL is forced but did not start"
+        fi
         DNS_NOTE="$DNS_LABEL did not start; presets run on plain DNS"
         bc_log WARN "$DNS_NOTE"
     fi
@@ -430,6 +459,9 @@ fi
 bc_log INFO "DNS for presets: $DNS_NOTE"
 
 if [ -n "$USE_DNS" ] && ! dns_on "$USE_DNS"; then
+    if [ "$DNS_FORCE" != auto ]; then
+        fail_run "$DNS_LABEL is forced but did not restart for the presets"
+    fi
     bc_log WARN "could not turn $DNS_LABEL back on; presets run on plain DNS"
     DNS_NOTE="$DNS_LABEL did not restart; presets run on plain DNS"
     USE_DNS=""

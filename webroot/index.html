@@ -260,13 +260,21 @@
     <section id="tab-blockcheck" class="tab">
       <div class="card">
         <h2>Blockcheck</h2>
-        <p class="hint">Finds the preset that gets your blocked domains through. Each domain is checked over HTTP, TLS 1.2, TLS 1.3 and QUIC. First a baseline with no bypass, then the same baseline with encrypted DNS (DoH, or DoT if DoH is unavailable). If encrypted DNS makes more domains available, every preset is tested with it on. Traffic is briefly interrupted while it runs. The app filter is switched off for the run, so the test traffic goes through the engine, and restored afterwards. Needs curl.</p>
+        <p class="hint">Finds the preset that gets your blocked domains through. Each domain is checked over HTTP, TLS 1.2, TLS 1.3 and QUIC. First a baseline with no bypass, then the same baseline with encrypted DNS (DoH, or DoT if DoH is unavailable). In Auto, if encrypted DNS makes more domains available, every preset is tested with it on. You can force DoH or DoT instead; then every preset runs with it on. Traffic is briefly interrupted while it runs. The app filter is switched off for the run, so the test traffic goes through the engine, and restored afterwards. Needs curl.</p>
         <label class="field">
           <span>Presets to test</span>
           <select id="bcCount">
             <option value="5">First 5</option>
             <option value="15" selected>First 15</option>
             <option value="0">All presets</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>DNS during the run</span>
+          <select id="bcDns">
+            <option value="auto" selected>Auto (DoH/DoT when it adds domains)</option>
+            <option value="doh">Force DoH</option>
+            <option value="dot">Force DoT</option>
           </select>
         </label>
         <div class="actions">

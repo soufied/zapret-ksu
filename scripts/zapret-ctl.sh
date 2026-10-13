@@ -896,6 +896,8 @@ cmd_blockcheck() {
             fi
             n="${2:-15}"
             case "$n" in ''|*[!0-9]*) die "preset count must be a number" ;; esac
+            dns_opt="${3:-auto}"
+            case "$dns_opt" in auto|doh|dot) ;; *) die "DNS option must be auto, doh or dot" ;; esac
             mkrun
             rm -f "$BC_RESULTS" "$RUN_DIR/blockcheck.raw"
             was=0
@@ -905,7 +907,7 @@ cmd_blockcheck() {
                 stop_engines
                 sh "$FW" stop >/dev/null 2>&1
             fi
-            mlog ctl INFO "blockcheck requested (presets=$n)"
+            mlog ctl INFO "blockcheck requested (presets=$n, dns=$dns_opt)"
             {
                 echo "engine=$(conf_get ENGINE)"
                 echo "state=running"
@@ -918,7 +920,7 @@ cmd_blockcheck() {
                 echo "started=$(date +%s)"
                 echo "updated=$(date +%s)"
             } > "$BC_STATE"
-            ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" >/dev/null 2>&1 </dev/null &
+            ZAPRET_BC_RESTORE="$was" MLOG_ECHO=0 sh "$MODDIR/scripts/blockcheck.sh" run "$n" "$dns_opt" >/dev/null 2>&1 </dev/null &
             echo $! > "$BC_PID"
             echo "blockcheck started (pid $!)"
             ;;
@@ -1753,7 +1755,7 @@ case "${1:-}" in
     bc-lists)      cmd_bc_lists "${2:-}" "${3:-}" ;;
     bc-available)  cmd_bc_available ;;
     update)        cmd_update "${2:-}" ;;
-    blockcheck)    cmd_blockcheck "${2:-}" "${3:-}" ;;
+    blockcheck)    cmd_blockcheck "${2:-}" "${3:-}" "${4:-}" ;;
     bc-report)     cmd_bc_report ;;
     bc-results)    bc_results ;;
     log)           if [ "${2:-}" = clear ]; then cmd_log_clear; else cmd_log "${2:-}"; fi ;;

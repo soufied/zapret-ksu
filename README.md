@@ -6,7 +6,7 @@ Primary target: KernelSU and KernelSU-Next (arm64). Magisk and APatch are suppor
 
 ## Install
 
-1. Flash `zapret-ksu-v1.2.0.zip` in the KernelSU manager and reboot.
+1. Flash `zapret-ksu-v1.2.1.zip` in the KernelSU manager and reboot.
 2. Open the WebUI, go to **Components** and tap **Update all**. This downloads nfqws, nfqws2, the zapret 2 presets, the zapret 1 strategies and dnscrypt-proxy.
 3. In **Settings → Engine and preset**, choose an engine and a preset or strategy.
 4. Tap **Start** on the **Home** tab.
@@ -33,6 +33,8 @@ A domain counts as available when its HTTPS probe succeeds. Results fill in as e
 Blockcheck writes its own log to `run/blockcheck.log`, so `zapret.log` stays readable. Each preset line shows whether the engine came up, and each failed probe shows curl's own error text. **Copy report** in the Blockcheck tab copies the state, the results and that log.
 
 The app filter is switched off for the run. In include mode the engine only handles the listed apps, and Blockcheck's own curl is not one of them, so its results would not reflect the presets. The previous setting is restored when the run ends, including on cancel.
+
+The **DNS during the run** option sets how encrypted DNS is used. **Auto** keeps the behaviour above. **Force DoH** or **Force DoT** runs every preset with that mode on, even when it adds no domains. If the forced mode can't start, the run stops with an error instead of falling back.
 
 Encrypted DNS is turned off again when Blockcheck finishes, and the previous Private DNS setting is restored. **Use** selects a preset but does not turn encrypted DNS on; do that yourself if the best row needs it.
 

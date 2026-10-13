@@ -764,11 +764,12 @@
 
   async function startBlockcheck() {
     const n = $("bcCount").value;
+    const dns = $("bcDns").value;
     S.bcStarting = true;
     S.bc = { ...(S.bc || {}), bc_state: "running", bc_message: "starting…" };
     renderBlockcheck();
     try {
-      const r = await ctl(`blockcheck start ${n}`);
+      const r = await ctl(`blockcheck start ${n} ${dns}`);
       if (r.errno !== 0) {
         toast((r.stdout || r.stderr).trim() || "Blockcheck could not start", 6000, "err");
         return;
