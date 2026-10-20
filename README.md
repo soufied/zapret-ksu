@@ -114,3 +114,7 @@ Downloaded engines, presets, strategies and dnscrypt-proxy are kept in `/data/ad
 - [zapretdiscordyoutube/magisk-zapret2](https://git.zapret.moe/zapretdiscordyoutube/magisk-zapret2): the base of this module
 - [adivenxnataly/KsuWebUI](https://github.com/adivenxnataly/KsuWebUI): WebUI runtime
 - [DNSCrypt/dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy): DNS proxy
+
+## License
+
+GPL-3.0-only. See [LICENSE](LICENSE).
