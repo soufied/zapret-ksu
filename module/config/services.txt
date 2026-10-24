@@ -1,0 +1,8 @@
+yt|YouTube|youtube.com youtu.be googlevideo.com ytimg.com
+ds|Discord|discord.com discord.gg discordapp.com cdn.discordapp.com gateway.discord.gg discord.media
+ig|Instagram|instagram.com cdninstagram.com
+fb|Facebook|facebook.com fbcdn.net messenger.com
+x|X (Twitter)|x.com twitter.com twimg.com t.co
+tg|Telegram|telegram.org t.me web.telegram.org
+tt|TikTok|tiktok.com tiktokcdn.com
+sp|Spotify|spotify.com scdn.co

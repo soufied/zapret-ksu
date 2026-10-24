@@ -1,6 +1,0 @@
-id=zapret-ksu
-name=zapret KSU
-version=1.2.2
-versionCode=122
-author=soufi
-description=zapret (nfqws1 and nfqws2) DPI bypass with nftables/iptables routing and a WebUI. Works with KernelSU, KernelSU-Next. Untested for Magisk and APatch.

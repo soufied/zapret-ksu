@@ -1,21 +1,67 @@
+*.zip
+.gitignore
+
+# Gradle
+.gradle/
+**/.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# Kotlin / IntelliJ / Android Studio
+.kotlin/
+**/.kotlin/
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration (SDK paths, secrets)
+local.properties
+*.local.properties
+
+# Release signing: never commit keys or passwords
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+*.p12
+*.pem
+*.key
+*.pass
+*.password
+*.secret
+*.token
+*secret*.json
+*credentials*
+.env
+.env.*
+
+# Build output and APKs
+dist/
+*.apk
+*.aab
+*.idsig
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# Runtime state and downloaded engines (fetched on the device, never committed)
+run/
+module/run/
+module/zapret1/
+module/zapret2/
+module/bin/*
+!module/bin/README.txt
+
+# Logs and temp files
 *.log
 *.tmp
 *.bak
-*~
-
-*.zip
-*.tar.gz
-build/
-dist/
-out/
-
-.DS_Store
-Thumbs.db
-
-.idea/
-.vscode/
 *.swp
-*.swo
-
-*.local
-local.properties
+*~
