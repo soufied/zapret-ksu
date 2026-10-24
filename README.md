@@ -76,8 +76,8 @@ This project stands on the work of others. Thank you to:
 | [bol-van/zapret](https://github.com/bol-van/zapret) | nfqws, the zapret 1 engine |
 | [bol-van/zapret2](https://github.com/bol-van/zapret2) | nfqws2, the zapret 2 engine |
 | [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) | zapret 1 strategies |
-| [zapret2-youtube-discord](https://git.zapret.moe/zapretdiscordyoutube/zapret2-youtube-discord) | zapret 2 presets, Lua scripts, lists |
-| [magisk-zapret2](https://git.zapret.moe/zapretdiscordyoutube/magisk-zapret2) | module reference |
+| [zapret2-youtube-discord](https://git2.zapret.moe/zapretdiscordyoutube/zapret2-youtube-discord) | zapret 2 presets, Lua scripts, lists |
+| [magisk-zapret2](https://git2.zapret.moe/zapretdiscordyoutube/magisk-zapret2) | module reference |
 | [dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy) | encrypted DNS proxy |
 | [libsu](https://github.com/topjohnwu/libsu) | root shell access in the app |
 | [tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) | TG WS Proxy |
