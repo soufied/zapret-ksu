@@ -4,6 +4,22 @@ import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+enum class Gate { NoRoot, NoModule, Ready }
+
+data class MirrorConfig(val enabled: Boolean, val github: List<String>, val zapret: List<String>) {
+    companion object {
+        val DEFAULT_GITHUB = listOf(
+            "https://cdn.akaere.online/",
+            "https://fastgit.cc/",
+            "https://jiashu.1win.eu.org/",
+            "https://ghm.078465.xyz/",
+            "https://gh-proxy.com/"
+        )
+        val DEFAULT_ZAPRET = listOf("https://git2.zapret.moe", "https://git3.zapret.moe", "https://git4.zapret.moe")
+        val DEFAULT = MirrorConfig(true, DEFAULT_GITHUB, DEFAULT_ZAPRET)
+    }
+}
+
 object ZapretCtl {
 
     const val MODDIR = "/data/adb/modules/zapret-ksu"
@@ -47,6 +63,50 @@ object ZapretCtl {
             false
         }
     }
+
+    suspend fun gate(): Gate = when {
+        !hasRoot() -> Gate.NoRoot
+        !moduleInstalled() -> Gate.NoModule
+        else -> Gate.Ready
+    }
+
+    suspend fun moduleInstalled(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            Shell.cmd(
+                "[ -f $MODDIR/scripts/zapret-ctl.sh ] && [ -f $MODDIR/module.prop ] && [ ! -e $MODDIR/remove ] && grep -qx 'id=zapret-ksu' $MODDIR/module.prop && echo present"
+            ).exec().out.any { it.trim() == "present" }
+        }.getOrDefault(false)
+    }
+
+    private fun words(s: String?): List<String> = s.orEmpty().split(' ').filter { it.isNotBlank() }
+
+    suspend fun mirrorsGet(): MirrorConfig {
+        val m = kv(run("mirrors", "get").lines)
+        if (m.isEmpty()) return MirrorConfig.DEFAULT
+        return MirrorConfig(
+            enabled = m["enabled"] != "0",
+            github = words(m["github"]),
+            zapret = words(m["zapret"])
+        )
+    }
+
+    suspend fun mirrorsEnabled(on: Boolean): Result = run("mirrors", "enabled", if (on) "1" else "0")
+    suspend fun mirrorsSave(kind: String, list: List<String>): Result =
+        run("mirrors", "save", kind, list.joinToString(" "))
+    suspend fun mirrorsReset(): Result = run("mirrors", "reset")
+
+    suspend fun appReleases(): String {
+        val r = run("app-releases")
+        if (!r.ok || r.lines.isEmpty()) {
+            throw java.io.IOException(r.text.ifBlank { "module could not reach GitHub" })
+        }
+        return r.lines.joinToString("\n")
+    }
+
+    suspend fun appFetchStart(url: String, dest: String, uid: Int, total: Long): Result =
+        run("app-start", url, dest, uid.toString(), total.toString())
+
+    suspend fun appFetchStatus(): Map<String, String> = kv(run("app-status").lines)
 
     suspend fun run(vararg args: String): Result = withContext(Dispatchers.IO) {
         val cmd = (listOf("sh", quote(CTL)) + args.map(::quote)).joinToString(" ")

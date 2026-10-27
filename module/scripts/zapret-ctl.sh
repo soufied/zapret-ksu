@@ -10,6 +10,8 @@ Z2_DIR="$MODDIR/zapret2"
 NFQWS1_PID="$RUN_DIR/nfqws.pid"
 NFQWS2_PID="$RUN_DIR/nfqws2.pid"
 UPDATE_STATE="$RUN_DIR/update.state"
+APP_STATE="$RUN_DIR/app-update.state"
+APP_PID="$RUN_DIR/app-update.pid"
 UPDATE_PID="$RUN_DIR/update.pid"
 
 EDITABLE="ENGINE STRATEGY NFQWS_UID BACKEND IFACE TCP_PORTS QUIC_ENABLED GAME_FILTER_TCP GAME_FILTER_UDP BYPASS_PRIVATE BYPASS_VPN CONNTRACK_ACCT AUTO_START BACKUP_LISTS LOG_ENABLED SMART_MODE SMART_FAILS SMART_WINDOW UDP_PORTS APP_MODE APP_LIST AUTO_NETWORK AUTO_NETWORK_START AUTO_STOP_NONE WIFI_IFACE WIFI_ENGINE WIFI_STRATEGY MOBILE_IFACE MOBILE_ENGINE MOBILE_STRATEGY DOH_ENABLED DOH_AUTO_START DOH_PROVIDERS TG_AUTO_START TG_PORT TG_LAN TG_SECRET TG_DEFAULT_DOMAINS"
@@ -1294,8 +1296,189 @@ cmd_apps_list() {
     cat "$CACHE"
 }
 
+app_busy() {
+    [ -f "$APP_PID" ] || return 1
+    grep -q '^state=running' "$APP_STATE" 2>/dev/null || return 1
+    kill -0 "$(cat "$APP_PID")" 2>/dev/null
+}
+
+app_state_write() {
+    mkrun
+    {
+        echo "state=$1"
+        echo "message=$2"
+        echo "dest=$3"
+        echo "total=$4"
+        echo "updated=$(date +%s)"
+    } > "$APP_STATE.tmp" && mv -f "$APP_STATE.tmp" "$APP_STATE"
+}
+
+app_dest_ok() {
+    case "$1" in
+        /data/user/0/com.so.zapretksu/cache/updates/*.apk) ;;
+        /data/data/com.so.zapretksu/cache/updates/*.apk) ;;
+        *) return 1 ;;
+    esac
+    case "$1" in *..*|*" "*) return 1 ;; esac
+    rest="${1#*/cache/updates/}"
+    case "$rest" in */*|"") return 1 ;; esac
+    return 0
+}
+
+app_candidates() {
+    echo "$1"
+    if [ "$MIRRORS_ENABLED" = 1 ]; then
+        for m in $GH_MIRRORS; do echo "$m$1"; done
+    fi
+}
+
+app_dl() {
+    if command -v curl >/dev/null 2>&1; then
+        capath=""
+        [ -d /system/etc/security/cacerts ] && capath="--capath /system/etc/security/cacerts"
+        curl -fsSL --connect-timeout 6 --max-time 900 --speed-limit 1024 --speed-time 20 $capath -o "$2" "$1"
+    elif [ -x "$BB" ]; then
+        "$BB" wget -q -T 8 -O "$2" "$1"
+    else
+        return 1
+    fi
+}
+
+cmd_app_releases() {
+    out=$(http_get "https://api.github.com/repos/soufied/zapret-ksu/releases?per_page=10") || die "module could not reach GitHub"
+    printf '%s\n' "$out"
+}
+
+cmd_app_start() {
+    url="${1:-}"; dest="${2:-}"; uid="${3:-}"; total="${4:-0}"
+    case "$url" in https://*) ;; *) die "bad download url" ;; esac
+    app_dest_ok "$dest" || die "bad destination"
+    case "$uid" in ""|*[!0-9]*) die "bad uid" ;; esac
+    case "$total" in ""|*[!0-9]*) total=0 ;; esac
+    if app_busy; then
+        echo "an app download is already running"
+        return 1
+    fi
+    mkrun
+    app_state_write running "starting" "$dest" "$total"
+    MLOG_ECHO=0 sh "$MODDIR/scripts/zapret-ctl.sh" app-fetch-run "$url" "$dest" "$uid" "$total" >>"$LOG" 2>&1 </dev/null &
+    echo $! > "$APP_PID"
+    echo "started"
+}
+
+cmd_app_fetch_run() {
+    url="$1"; dest="$2"; uid="$3"; total="$4"
+    part="$dest.part"
+    mkdir -p "$(dirname "$dest")" 2>/dev/null
+    rm -f "$part"
+    for u in $(app_candidates "$url"); do
+        app_state_write running "downloading" "$dest" "$total"
+        mlog ctl INFO "app update: GET $u"
+        if app_dl "$u" "$part" && [ -s "$part" ] && [ "$(head -c 2 "$part")" = "PK" ]; then
+            if mv -f "$part" "$dest" && chown "$uid:$uid" "$dest" && chmod 0644 "$dest"; then
+                app_state_write done "downloaded" "$dest" "$total"
+                mlog ctl INFO "app update downloaded: $(basename "$dest")"
+                return 0
+            fi
+            rm -f "$part" "$dest"
+            app_state_write error "could not place the APK for the installer" "$dest" "$total"
+            return 1
+        fi
+        mlog ctl WARN "app update: failed $u"
+    done
+    rm -f "$part"
+    app_state_write error "download failed on all mirrors" "$dest" "$total"
+    mlog ctl ERROR "app update: download failed on all mirrors"
+    return 1
+}
+
+cmd_app_status() {
+    st=idle; msg=""; dest=""; total=0
+    if [ -f "$APP_STATE" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                state=*)   st="${line#state=}" ;;
+                message=*) msg="${line#message=}" ;;
+                dest=*)    dest="${line#dest=}" ;;
+                total=*)   total="${line#total=}" ;;
+            esac
+        done < "$APP_STATE"
+    fi
+    if [ "$st" = running ] && ! app_busy; then
+        st=error
+        msg="download process stopped unexpectedly"
+    fi
+    bytes=0
+    if [ "$st" = done ] && [ -f "$dest" ]; then
+        bytes=$(wc -c < "$dest" 2>/dev/null)
+    elif [ -f "$dest.part" ]; then
+        bytes=$(wc -c < "$dest.part" 2>/dev/null)
+    fi
+    echo "app_state=$st"
+    echo "app_message=$msg"
+    echo "app_bytes=${bytes:-0}"
+    echo "app_total=${total:-0}"
+}
+
+mirror_gh_ok() {
+    case "$1" in https://?*/) ;; *) return 1 ;; esac
+    case "$1" in *[!A-Za-z0-9./_~:-]*) return 1 ;; esac
+    return 0
+}
+
+mirror_zapret_ok() {
+    case "$1" in https://?*) ;; *) return 1 ;; esac
+    case "$1" in */) return 1 ;; esac
+    case "$1" in *[!A-Za-z0-9./_~:-]*) return 1 ;; esac
+    return 0
+}
+
+mirrors_save() {
+    mkdir -p "$MODDIR/config" 2>/dev/null
+    {
+        echo "MIRRORS_ENABLED=$1"
+        echo "GH_MIRRORS=\"$2\""
+        echo "ZAPRET_MIRRORS=\"$3\""
+    } > "$MIRRORS_CONF.tmp" && mv -f "$MIRRORS_CONF.tmp" "$MIRRORS_CONF"
+}
+
+cmd_mirrors() {
+    case "$1" in
+        get)
+            echo "enabled=$MIRRORS_ENABLED"
+            echo "github=$GH_MIRRORS"
+            echo "zapret=$ZAPRET_MIRRORS"
+            ;;
+        enabled)
+            case "$2" in 0|1) ;; *) die "enabled must be 0 or 1" ;; esac
+            mirrors_save "$2" "$GH_MIRRORS" "$ZAPRET_MIRRORS"
+            ;;
+        save)
+            case "$2" in
+                github)
+                    for m in $3; do mirror_gh_ok "$m" || die "invalid GitHub mirror: $m"; done
+                    mirrors_save "$MIRRORS_ENABLED" "$3" "$ZAPRET_MIRRORS"
+                    ;;
+                zapret)
+                    for m in $3; do mirror_zapret_ok "$m" || die "invalid zapret.moe mirror: $m"; done
+                    mirrors_save "$MIRRORS_ENABLED" "$GH_MIRRORS" "$3"
+                    ;;
+                *) die "kind must be github or zapret" ;;
+            esac
+            ;;
+        reset)
+            mirrors_save "$MIRRORS_ENABLED" "$DEFAULT_GH_MIRRORS" "$DEFAULT_ZAPRET_MIRRORS"
+            ;;
+        *) die "usage: mirrors get | enabled 0|1 | save github|zapret LIST | reset" ;;
+    esac
+}
+
 http_get() {
-    for url in "$1" $(for m in $GH_MIRRORS; do echo "$m$1"; done); do
+    urls="$1"
+    if [ "$MIRRORS_ENABLED" = 1 ]; then
+        for m in $GH_MIRRORS; do urls="$urls $m$1"; done
+    fi
+    for url in $urls; do
         if command -v curl >/dev/null 2>&1; then
             out=$(curl -fsSL --connect-timeout 8 --max-time 20 "$url" 2>/dev/null)
         elif [ -x "$BB" ]; then
@@ -2331,6 +2514,11 @@ case "${1:-}" in
     backup-import) cmd_backup_import "$@" ;;
     ipset)         cmd_ipset "${2:-}" "${3:-}" ;;
     fakes)         cmd_fakes "${2:-}" "${3:-}" "${4:-}" ;;
+    app-releases)  cmd_app_releases ;;
+    app-start)     cmd_app_start "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+    app-fetch-run) cmd_app_fetch_run "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+    app-status)    cmd_app_status ;;
+    mirrors)       cmd_mirrors "${2:-}" "${3:-}" "${4:-}" ;;
     file)          cmd_file "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
     update)        cmd_update "${2:-}" ;;
     update-cancel) cmd_update_cancel ;;

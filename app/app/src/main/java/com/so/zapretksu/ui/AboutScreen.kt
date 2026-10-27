@@ -265,6 +265,7 @@ private fun CreditRow(credit: Credit, featured: Boolean) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .tvFocus(RoundedCornerShape(16.dp))
             .clickable {
                 runCatching {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(credit.url)))

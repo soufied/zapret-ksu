@@ -69,6 +69,7 @@ private fun FlatGlassPill(
             .glassPanel(FlatPillRadius, LocalAppearance.current.tune.tint)
             .background(tint, shape)
             .glassRim(FlatPillRadius)
+            .tvFocus(shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(padding),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
@@ -191,6 +192,7 @@ fun SelectTile(
                 .glassPanel(TileShape, LocalAppearance.current.tune.tint)
                 .glassRim(TileShape)
                 .background(tint, shape)
+                .tvFocus(shape)
                 .clickable(enabled = enabled, onClick = onClick)
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),

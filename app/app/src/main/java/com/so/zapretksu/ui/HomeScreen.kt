@@ -386,6 +386,7 @@ private fun HeroContent(
             modifier = Modifier
                 .size(116.dp)
                 .clip(CircleShape)
+                .tvFocus(CircleShape)
                 .clickable(enabled = !busy) { onToggle(!running) }
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {

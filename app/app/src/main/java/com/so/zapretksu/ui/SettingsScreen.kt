@@ -23,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
@@ -240,6 +241,8 @@ fun SettingsScreen(onOpen: (Route) -> Unit) {
             }
 
             AppCard(Modifier.fillMaxWidth()) {
+                SettingsRow(Icons.Filled.Download, "Download", "Mirrors and app updates") { onOpen(Route.Download) }
+                HorizontalDivider()
                 SettingsRow(Icons.Filled.Info, "About", "Version, credits and links") { onOpen(Route.About) }
             }
         }
@@ -339,7 +342,7 @@ private fun SettingsRow(icon: ImageVector, title: String, summary: String, onCli
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().tvFocus(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
     )
 }
 
@@ -754,6 +757,7 @@ private fun SeedPicker(seed: Int, onChange: (Int) -> Unit) {
                     )
                     .padding(3.dp)
                     .background(Color(c), CircleShape)
+                    .tvFocus(CircleShape)
                     .clickable { onChange(c) }
             )
         }

@@ -2,7 +2,7 @@
 
 A KernelSU module and companion Android app that bypass DPI blocking with zapret. It runs nfqws (zapret 1) and nfqws2 (zapret 2), adds an encrypted DNS proxy, and gives you one screen to control all of it.
 
-**Version 1.3.0** · KernelSU and KernelSU-Next · arm64 · Magisk and APatch untested
+**Version 1.3.1** · KernelSU and KernelSU-Next · arm64 · Magisk and APatch untested
 
 ## Screenshots
 
@@ -16,17 +16,18 @@ A KernelSU module and companion Android app that bypass DPI blocking with zapret
 ## Features
 
 - **Two engines.** nfqws2 (zapret 2, presets, recommended) and nfqws1 (zapret 1, strategies with game filter and ipset).
-- **Smart Mode.** Detects sites that reset or stall and adds them to the host list automatically.
+- **Smart Mode.** Spots sites that reset or stall and adds them to the host list on its own.
 - **Blockcheck.** Tests every preset against your blocked hosts and ranks the results.
-- **Whitelist check.** Tells you whether you are on a whitelist network, and whether zapret is helping.
+- **Whitelist check.** Shows whether you are on a whitelist network and whether zapret is helping.
 - **Per-app routing.** Include or exclude individual apps from the bypass.
-- **Host lists.** Toggle services (YouTube, Discord, Instagram, X and more), add custom domains, edit and import or export every list.
+- **Host lists.** Toggle services (YouTube, Discord, Instagram, X and more), add custom domains, and edit, import or export any list.
 - **Encrypted DNS.** A local DoH proxy (dnscrypt-proxy) with redirects for system DNS.
 - **TG WS Proxy.** A local Telegram MTProto proxy, optionally shared on your Wi-Fi.
 - **Auto network profile.** Separate engine, preset and interface for Wi-Fi and mobile data.
 - **Quick Settings tiles** for zapret, DNS and TG proxy.
 - **Backup and restore** of settings, lists and presets.
 - **Logs** with level and text filters.
+- **App autoupdate.** On launch, checks GitHub for new releases and pre-releases, downloads the new APK through the module and opens the Android installer. Turn it off or check manually in Settings → Download.
 - **Two looks.** Material 3 with wallpaper colors, or Liquid Glass.
 
 ## Install

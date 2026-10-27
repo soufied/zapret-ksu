@@ -40,6 +40,10 @@ if [ -d "$OLD/config" ]; then
     fi
 fi
 
+if [ -f "$OLD/config/mirrors.conf" ]; then
+    ui_print "- Keeping mirror settings"
+    cp -f "$OLD/config/mirrors.conf" "$MODPATH/config/mirrors.conf"
+fi
 if [ -d "$OLD" ]; then
     ui_print "- Keeping downloaded engines, presets and strategies"
     for d in bin zapret1 zapret2; do

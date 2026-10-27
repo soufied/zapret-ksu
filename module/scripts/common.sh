@@ -2,7 +2,17 @@
 LOG="${ZAPRET_LOG:-$MODDIR/zapret.log}"
 RUN_DIR="$MODDIR/run"
 LOG_MAX=524288
-GH_MIRRORS="https://cdn.akaere.online/ https://fastgit.cc/ https://jiashu.1win.eu.org/ https://ghm.078465.xyz/ https://gh.chjina.com/"
+MIRRORS_CONF="$MODDIR/config/mirrors.conf"
+DEFAULT_GH_MIRRORS="https://cdn.akaere.online/ https://fastgit.cc/ https://jiashu.1win.eu.org/ https://ghm.078465.xyz/ https://gh-proxy.com/"
+DEFAULT_ZAPRET_MIRRORS="https://git2.zapret.moe https://git3.zapret.moe https://git4.zapret.moe"
+mconf_has() { grep -q "^$1=" "$MIRRORS_CONF" 2>/dev/null; }
+mconf_get() { sed -n "s/^$1=//p" "$MIRRORS_CONF" 2>/dev/null | tail -n 1 | tr -d '"'; }
+MIRRORS_ENABLED=1
+if mconf_has MIRRORS_ENABLED; then MIRRORS_ENABLED=$(mconf_get MIRRORS_ENABLED); fi
+GH_MIRRORS=$DEFAULT_GH_MIRRORS
+if mconf_has GH_MIRRORS; then GH_MIRRORS=$(mconf_get GH_MIRRORS); fi
+ZAPRET_MIRRORS=$DEFAULT_ZAPRET_MIRRORS
+if mconf_has ZAPRET_MIRRORS; then ZAPRET_MIRRORS=$(mconf_get ZAPRET_MIRRORS); fi
 MLOG_ECHO="${MLOG_ECHO:-1}"
 
 mkrun() { mkdir -p "$RUN_DIR" 2>/dev/null; }

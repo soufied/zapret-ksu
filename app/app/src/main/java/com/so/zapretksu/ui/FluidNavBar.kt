@@ -1,4 +1,5 @@
 package com.so.zapretksu.ui
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -187,6 +188,7 @@ private fun RowScope.NavTab(route: Route, selected: Boolean, glass: Boolean, onC
         Modifier
             .weight(1f)
             .then(if (optimized) Modifier else Modifier.liquidMotion(motion))
+            .tvFocus(RoundedCornerShape(16.dp))
             .clickable(interactionSource = source, indication = null, onClick = onClick)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally

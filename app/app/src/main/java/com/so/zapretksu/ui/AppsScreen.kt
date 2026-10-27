@@ -215,6 +215,7 @@ private fun AppRow(app: AppEntry, checked: Boolean, onToggle: () -> Unit) {
             .fillMaxWidth()
             .clip(shape)
             .background(listRowColor(checked), shape)
+            .tvFocus(shape)
             .clickable(onClick = onToggle)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

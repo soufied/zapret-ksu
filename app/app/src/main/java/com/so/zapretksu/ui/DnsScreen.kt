@@ -267,6 +267,7 @@ private fun ProviderRow(
             .fillMaxWidth()
             .clip(shape)
             .background(listRowColor(checked && isDoh), shape)
+            .tvFocus(shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(start = 12.dp, end = if (canDelete) 0.dp else 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

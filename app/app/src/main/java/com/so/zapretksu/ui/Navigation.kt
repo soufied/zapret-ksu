@@ -11,11 +11,12 @@ enum class Route(val title: String, val isTopLevel: Boolean) {
     Dns("DNS", false),
     Lists("Lists", false),
     Tg("TG WS Proxy", false),
-    About("About", false);
+    About("About", false),
+    Download("Download", false);
 
     val parent: Route
         get() = when (this) {
-            About -> Settings
+            About, Download -> Settings
             else -> Tools
         }
 

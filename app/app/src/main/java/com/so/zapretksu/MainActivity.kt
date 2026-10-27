@@ -69,6 +69,7 @@ import com.so.zapretksu.ui.AmbientBackdrop
 import com.so.zapretksu.ui.AppSnackbar
 import com.so.zapretksu.ui.Appearance
 import com.so.zapretksu.ui.AboutScreen
+import com.so.zapretksu.ui.DownloadScreen
 import com.so.zapretksu.ui.AppsScreen
 import com.so.zapretksu.ui.BlockcheckScreen
 import com.so.zapretksu.ui.ComponentsScreen
@@ -80,7 +81,13 @@ import com.so.zapretksu.ui.LocalGlassState
 import com.so.zapretksu.ui.LogsScreen
 import com.so.zapretksu.ui.ListsScreen
 import com.so.zapretksu.ui.Route
-import com.so.zapretksu.ui.RootGate
+import com.so.zapretksu.ui.GateDialog
+import com.so.zapretksu.ui.AppUpdateDialog
+import com.so.zapretksu.ui.LocalAppUpdate
+import com.so.zapretksu.ui.LocalTelevision
+import com.so.zapretksu.ui.isTelevision
+import com.so.zapretksu.update.AppUpdatePrefs
+import com.so.zapretksu.update.AppUpdateState
 import com.so.zapretksu.ui.SettingsScreen
 import com.so.zapretksu.ui.ThemeMode
 import com.so.zapretksu.ui.ThemePrefs
@@ -142,9 +149,13 @@ fun AppRoot() {
     val glassState = rememberLiquidGlassProviderState()
     MotionPrefs.optimized = optimized
     glassState.requestedTier = if (optimized) GlassRenderTier.SCRIM else null
+    val tv = remember { isTelevision(context) }
+    val updates = remember { AppUpdateState() }
     CompositionLocalProvider(
         LocalAppearance provides appearance,
-        LocalGlassState provides glassState
+        LocalGlassState provides glassState,
+        LocalTelevision provides tv,
+        LocalAppUpdate provides updates
     ) {
         ZapretKsuTheme(mode, wallpaper, seed) {
             App()
@@ -159,14 +170,17 @@ fun App() {
     val glass = LocalAppearance.current.mode == ThemeMode.GLASS
     val optimized = LocalAppearance.current.optimized
     val glassState = LocalGlassState.current
-    var rooted by remember { mutableStateOf<Boolean?>(null) }
+    val context = LocalContext.current
+    val updates = LocalAppUpdate.current
+    var gate by remember { mutableStateOf<Gate?>(null) }
     var checking by remember { mutableStateOf(true) }
+    val ready = gate == Gate.Ready
     var route by remember { mutableStateOf(Route.Home) }
     var bcRunning by remember { mutableStateOf(false) }
 
     val snap = remember { mutableStateOf<ZapretCtl.Snapshot?>(null) }
-    LaunchedEffect(rooted) {
-        if (rooted != true) return@LaunchedEffect
+    LaunchedEffect(ready) {
+        if (!ready) return@LaunchedEffect
         while (true) {
             val s = ZapretCtl.snapshot(logLines = 0)
             snap.value = s
@@ -174,6 +188,9 @@ fun App() {
             val busy = bcRunning || s.update["update_state"] == "running"
             delay(if (busy) 1500L else 4000L)
         }
+    }
+    LaunchedEffect(ready) {
+        if (ready && AppUpdatePrefs.checkOnLaunch(context)) updates.check(context, manual = false)
     }
     LaunchedEffect(bcRunning) {
         if (bcRunning && route != Route.Blockcheck) route = Route.Blockcheck
@@ -197,15 +214,15 @@ fun App() {
     fun check() {
         scope.launch {
             checking = true
-            rooted = ZapretCtl.hasRoot()
+            gate = ZapretCtl.gate()
             checking = false
         }
     }
 
     LaunchedEffect(Unit) { check() }
 
-    BackHandler(enabled = rooted != true) { }
-    BackHandler(enabled = rooted == true && !route.isTopLevel) { go(route.parent) }
+    BackHandler(enabled = !ready) { }
+    BackHandler(enabled = ready && !route.isTopLevel) { go(route.parent) }
 
     CompositionLocalProvider(LocalSnapshot provides snap) {
     Box(Modifier.fillMaxSize()) {
@@ -225,13 +242,13 @@ fun App() {
                 }
             },
             bottomBar = {
-                if (rooted == true && (route.isTopLevel || bcRunning)) {
+                if (ready && (route.isTopLevel || bcRunning)) {
                     FluidNavBar(route, if (glass) glassState else null) { go(it) }
                 }
             }
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                if (rooted == true) {
+                if (ready) {
                     AnimatedContent(
                         targetState = route,
                         transitionSpec = {
@@ -261,8 +278,10 @@ fun App() {
     }
     }
 
-    if (rooted != true) {
-        RootGate(checking = checking, onRetry = { check() })
+    if (ready) {
+        AppUpdateDialog(updates)
+    } else {
+        GateDialog(gate = gate, checking = checking, onRetry = { check() })
     }
 }
 
@@ -280,6 +299,7 @@ private fun RouteScreen(route: Route, onOpen: (Route) -> Unit) {
         Route.Lists -> CompositionLocalProvider(LocalFlatGlass provides true) { ListsScreen() }
         Route.Tg -> TgProxyScreen()
         Route.About -> AboutScreen()
+        Route.Download -> DownloadScreen()
     }
 }
 
@@ -346,4 +366,5 @@ internal fun Route.icon(): ImageVector = when (this) {
     Route.Lists -> Icons.Filled.Edit
     Route.Tg -> Icons.AutoMirrored.Filled.Send
     Route.About -> Icons.Filled.Info
+    Route.Download -> Icons.Filled.Download
 }

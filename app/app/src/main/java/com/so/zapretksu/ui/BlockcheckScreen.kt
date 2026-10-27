@@ -417,7 +417,7 @@ private fun ResultsSection(
             AccentCard {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().clickable { open = !open }
+                    modifier = Modifier.fillMaxWidth().tvFocus(RoundedCornerShape(16.dp)).clickable { open = !open }
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
@@ -512,7 +512,7 @@ private fun ResultCard(row: BcRow, rank: Int, running: Boolean, onUse: () -> Uni
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth().clickable { open = !open }
+            modifier = Modifier.fillMaxWidth().tvFocus(RoundedCornerShape(16.dp)).clickable { open = !open }
         ) {
             Text(
                 "#$rank",
@@ -578,6 +578,7 @@ private fun TestedDomains(row: BcRow, open: Boolean, onToggle: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .background(listRowColor(), RoundedCornerShape(12.dp))
+            .tvFocus(RoundedCornerShape(12.dp))
             .clickable(onClick = onToggle)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -649,6 +650,7 @@ private fun ServicePicker(
                 .fillMaxWidth()
                 .clip(shape)
                 .background(listRowColor(on), shape)
+                .tvFocus(shape)
                 .clickable(enabled = enabled) { onChange(if (on) picked - svc.key else picked + svc.key) }
                 .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -693,6 +695,7 @@ private fun PresetPicker(names: List<String>, picked: Set<String>, enabled: Bool
                 .fillMaxWidth()
                 .clip(shape)
                 .background(listRowColor(on), shape)
+                .tvFocus(shape)
                 .clickable(enabled = enabled) { onChange(if (on) picked - name else picked + name) }
                 .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically

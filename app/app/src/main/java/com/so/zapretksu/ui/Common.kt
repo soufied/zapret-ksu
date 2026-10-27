@@ -177,7 +177,7 @@ fun AppCard(
                 )
                 .glassPanel(GlassTokens.CardRadius, LocalAppearance.current.tune.tint)
                 .glassRim(GlassTokens.CardRadius)
-                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+                .then(if (onClick != null) Modifier.tvFocus(RoundedCornerShape(GlassTokens.CardRadius)).clickable(onClick = onClick) else Modifier)
                 .padding(GlassTokens.CardPadding),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             content = content
@@ -403,6 +403,7 @@ fun StrategyPicker(value: String, options: List<String>, onPick: (String) -> Uni
                                     listRowColor(on),
                                     shape
                                 )
+                                .tvFocus(shape)
                                 .clickable {
                                     onPick(o)
                                     open = false

@@ -58,12 +58,15 @@ mirror_urls() {
         https://git.zapret.moe/*)
             rest="${1#https://git.zapret.moe/}"
             echo "$1"
-            echo "https://git2.zapret.moe/$rest"
-            echo "https://git3.zapret.moe/$rest"
+            if [ "$MIRRORS_ENABLED" = 1 ]; then
+                for m in $ZAPRET_MIRRORS; do echo "$m/$rest"; done
+            fi
             ;;
         https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
             echo "$1"
-            for m in $GH_MIRRORS; do echo "$m$1"; done
+            if [ "$MIRRORS_ENABLED" = 1 ]; then
+                for m in $GH_MIRRORS; do echo "$m$1"; done
+            fi
             ;;
         *) echo "$1" ;;
     esac
@@ -73,7 +76,7 @@ dl_one() {
     if command -v curl >/dev/null 2>&1; then
         capath=""
         [ -d /system/etc/security/cacerts ] && capath="--capath /system/etc/security/cacerts"
-        curl -fsSL --connect-timeout 8 --max-time 240 $capath -o "$2" "$1"
+        curl -fsSL --connect-timeout 6 --max-time 240 --speed-limit 1024 --speed-time 20 $capath -o "$2" "$1"
     elif [ -x "$BB" ]; then
         mlog fetch WARN "$STEP: curl not installed; using BusyBox wget WITHOUT certificate checks"
         "$BB" wget -q -T 8 -O "$2" "$1"
