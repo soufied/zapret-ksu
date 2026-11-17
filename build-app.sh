@@ -11,11 +11,12 @@ UBER_JAR_SYSTEM=/usr/share/java/uber-apk-signer/uber-apk-signer.jar
 
 usage() {
     cat <<'EOF'
-usage: build-app.sh [--release]
+usage: build-app.sh [--release] [--module-only]
 
-  (default)   debug APK, copied to dist/
-  --release   signed release APK: asks for a keystore, or signs with the
-              uber-apk-signer debug key when none is given
+  (default)     builds the module zip and the debug APK into dist/
+  --release     signed release APK: asks for a keystore, or signs with the
+                uber-apk-signer debug key when none is given
+  --module-only builds only dist/zapret-ksu-module-<version>.zip
 
 environment: ANDROID_HOME, JAVA_HOME, GRADLE_VERSION, KEYSTORE, KS_ALIAS,
              KS_PASS, KEY_PASS, UBER_SIGNER
@@ -23,9 +24,11 @@ EOF
 }
 
 MODE=debug
+MODULE_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --release) MODE=release ;;
+        --module-only) MODULE_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 1 ;;
     esac
@@ -33,6 +36,24 @@ done
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+build_module() {
+    local version
+    version="$(sed -n 's/^version=//p' "$ROOT/module/module.prop" | head -n 1)"
+    [ -n "$version" ] || die "no version= in module/module.prop"
+    command -v zip >/dev/null 2>&1 || die "zip not found. Install it with: sudo pacman -S zip"
+    mkdir -p "$OUT_DIR"
+    local out="$OUT_DIR/zapret-ksu-module-$version.zip"
+    rm -f "$out"
+    say "Building module zip ($version)"
+    (cd "$ROOT/module" && zip -qr "$out" . -x "*.git*")
+    echo "    built: $out"
+}
+
+build_module
+if [ "$MODULE_ONLY" = 1 ]; then
+    exit 0
+fi
 
 java_major() {
     "$1/bin/java" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -n 1

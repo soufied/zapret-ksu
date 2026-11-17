@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -94,6 +95,7 @@ import com.so.zapretksu.ui.ThemePrefs
 import com.so.zapretksu.ui.ToolsScreen
 import com.so.zapretksu.ui.Md3Emphasized
 import com.so.zapretksu.ui.TgProxyScreen
+import com.so.zapretksu.ui.TetherScreen
 import com.so.zapretksu.ui.ZapretKsuTheme
 import com.so.zapretksu.ui.MotionPrefs
 import com.so.zapretksu.ui.zapretTween
@@ -298,6 +300,7 @@ private fun RouteScreen(route: Route, onOpen: (Route) -> Unit) {
         Route.Dns -> DnsScreen()
         Route.Lists -> CompositionLocalProvider(LocalFlatGlass provides true) { ListsScreen() }
         Route.Tg -> TgProxyScreen()
+        Route.VpnTethering -> TetherScreen()
         Route.About -> AboutScreen()
         Route.Download -> DownloadScreen()
     }
@@ -365,6 +368,7 @@ internal fun Route.icon(): ImageVector = when (this) {
     Route.Dns -> Icons.Filled.Lock
     Route.Lists -> Icons.Filled.Edit
     Route.Tg -> Icons.AutoMirrored.Filled.Send
+    Route.VpnTethering -> Icons.Filled.Share
     Route.About -> Icons.Filled.Info
     Route.Download -> Icons.Filled.Download
 }

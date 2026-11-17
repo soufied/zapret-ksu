@@ -11,6 +11,7 @@ enum class Route(val title: String, val isTopLevel: Boolean) {
     Dns("DNS", false),
     Lists("Lists", false),
     Tg("TG WS Proxy", false),
+    VpnTethering("VPN Tethering", false),
     About("About", false),
     Download("Download", false);
 

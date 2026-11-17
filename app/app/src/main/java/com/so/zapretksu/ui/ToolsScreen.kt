@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +35,7 @@ fun ToolsScreen(onOpen: (Route) -> Unit) {
         ToolCard(3, "DNS", "DoH proxy, provider tests and Private DNS.", Icons.Filled.Lock, Route.Dns, onOpen)
         ToolCard(4, "Lists", "Edit domain lists and strategy presets.", Icons.Filled.Edit, Route.Lists, onOpen)
         ToolCard(5, "TG WS Proxy", "Local Telegram proxy over WebSocket.", Icons.AutoMirrored.Filled.Send, Route.Tg, onOpen)
+        ToolCard(6, "VPN Tethering", "Share Wi-Fi or USB through the VPN, with a kill-switch.", Icons.Filled.Share, Route.VpnTethering, onOpen)
     }
 }
 

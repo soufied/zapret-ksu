@@ -78,6 +78,11 @@ private val CREDITS: List<Credit> = listOf(
         "https://git.zapret.moe/zapretdiscordyoutube/magisk-zapret2",
         "The reference this module is based on"
     ),
+    Credit(
+        "JagKubarev/vpn-tethering-ultra",
+        "https://github.com/JagKubarev/vpn-tethering-ultra",
+        "VPN tethering routing and BPF offload handling"
+    ),
     Credit("DNSCrypt/dnscrypt-proxy", "https://github.com/DNSCrypt/dnscrypt-proxy", "DNS proxy"),
     Credit("topjohnwu/libsu", "https://github.com/topjohnwu/libsu", "Root shell access in the app"),
     Credit("Abdullajon1881/LiquidGlass", "https://github.com/Abdullajon1881/LiquidGlass", "Liquid Glass rendering"),

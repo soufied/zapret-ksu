@@ -8,6 +8,11 @@ if [ -f "$MODDIR/scripts/zapret-ctl.sh" ]; then
     sh "$MODDIR/scripts/zapret-ctl.sh" stop >>"$LOG" 2>&1
 fi
 
+if [ -f "$MODDIR/scripts/tether.sh" ]; then
+    sh "$MODDIR/scripts/tether.sh" remove-tether >>"$LOG" 2>&1
+    sh "$MODDIR/scripts/tether.sh" quic-remove >>"$LOG" 2>&1
+fi
+
 if [ -f "$MODDIR/run/auto.pid" ]; then
     kill "$(cat "$MODDIR/run/auto.pid")" 2>/dev/null
 fi

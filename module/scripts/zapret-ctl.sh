@@ -4,6 +4,7 @@ MODDIR="${0%/*}/.."
 
 CONF="$MODDIR/config/zapret.conf"
 FW="$MODDIR/scripts/firewall.sh"
+TETHER="$MODDIR/scripts/tether.sh"
 FETCH="$MODDIR/scripts/fetch.sh"
 Z1_DIR="$MODDIR/zapret1"
 Z2_DIR="$MODDIR/zapret2"
@@ -14,7 +15,7 @@ APP_STATE="$RUN_DIR/app-update.state"
 APP_PID="$RUN_DIR/app-update.pid"
 UPDATE_PID="$RUN_DIR/update.pid"
 
-EDITABLE="ENGINE STRATEGY NFQWS_UID BACKEND IFACE TCP_PORTS QUIC_ENABLED GAME_FILTER_TCP GAME_FILTER_UDP BYPASS_PRIVATE BYPASS_VPN CONNTRACK_ACCT AUTO_START BACKUP_LISTS LOG_ENABLED SMART_MODE SMART_FAILS SMART_WINDOW UDP_PORTS APP_MODE APP_LIST AUTO_NETWORK AUTO_NETWORK_START AUTO_STOP_NONE WIFI_IFACE WIFI_ENGINE WIFI_STRATEGY MOBILE_IFACE MOBILE_ENGINE MOBILE_STRATEGY DOH_ENABLED DOH_AUTO_START DOH_PROVIDERS TG_AUTO_START TG_PORT TG_LAN TG_SECRET TG_DEFAULT_DOMAINS"
+EDITABLE="ENGINE STRATEGY NFQWS_UID BACKEND IFACE TCP_PORTS QUIC_ENABLED GAME_FILTER_TCP GAME_FILTER_UDP BYPASS_PRIVATE BYPASS_VPN CONNTRACK_ACCT AUTO_START BACKUP_LISTS LOG_ENABLED SMART_MODE SMART_FAILS SMART_WINDOW UDP_PORTS APP_MODE APP_LIST AUTO_NETWORK AUTO_NETWORK_START AUTO_STOP_NONE WIFI_IFACE WIFI_ENGINE WIFI_STRATEGY MOBILE_IFACE MOBILE_ENGINE MOBILE_STRATEGY DOH_ENABLED DOH_AUTO_START DOH_PROVIDERS TG_AUTO_START TG_PORT TG_LAN TG_SECRET TG_DEFAULT_DOMAINS TETHER_ENABLED TETHER_MODE TETHER_IFACES TETHER_VPN_IFACE TETHER_KILLSWITCH TETHER_NOPROV TETHER_OFFLOAD_OFF TETHER_TTL TETHER_QUIC_YT APP_QUIC_LIST"
 NET_ROUTE="${ZAPRET_NET_ROUTE:-/proc/net/route}"
 NET_SYS="${ZAPRET_NET_SYS:-/sys/class/net}"
 AUTO_PID="$RUN_DIR/auto.pid"
@@ -840,6 +841,19 @@ cmd_set() {
         TG_PORT)
             case "$v" in ""|*[!0-9]*) die "TG_PORT must be a number" ;; esac
             [ "$v" -ge 1 ] && [ "$v" -le 65535 ] || die "TG_PORT must be 1-65535" ;;
+        TETHER_ENABLED|TETHER_KILLSWITCH|TETHER_NOPROV|TETHER_OFFLOAD_OFF|TETHER_QUIC_YT)
+            case "$v" in 0|1) ;; *) die "$k must be 0 or 1" ;; esac ;;
+        TETHER_MODE)
+            case "$v" in direct|vpn) ;; *) die "TETHER_MODE must be direct or vpn" ;; esac ;;
+        TETHER_TTL)
+            case "$v" in ""|*[!0-9]*) die "TETHER_TTL must be a number from 0 to 255 (0 = off)" ;; esac
+            [ "$v" -le 255 ] || die "TETHER_TTL must be a number from 0 to 255 (0 = off)" ;;
+        TETHER_IFACES)
+            case "$v" in ""|*[!A-Za-z0-9,._+-]*) die "TETHER_IFACES must be comma-separated interface names" ;; esac ;;
+        TETHER_VPN_IFACE)
+            case "$v" in ""|*[!A-Za-z0-9._+*-]*) die "invalid VPN interface name" ;; esac ;;
+        APP_QUIC_LIST)
+            case "$v" in *[!A-Za-z0-9._,]*) die "APP_QUIC_LIST may only contain package names, UIDs and commas" ;; esac ;;
         TG_SECRET)
             case "$v" in *[!0-9a-fA-F]*) die "TG_SECRET must be 32 hex characters" ;; esac
             [ "${#v}" -eq 32 ] || die "TG_SECRET must be 32 hex characters" ;;
@@ -1079,6 +1093,7 @@ network_clean() {
     stop_engines
     sh "$FW" stop >/dev/null 2>&1
     doh_drop_dns
+    sh "$TETHER" remove-tether >/dev/null 2>&1
     if [ -f "$SAFETY_PID" ]; then kill "$(cat "$SAFETY_PID")" 2>/dev/null; fi
     rm -f "$SAFETY_PID" "$RUN_DIR/active.engine" "$RUN_DIR/active.strategy"
     left=$(network_leftovers)
@@ -1186,6 +1201,7 @@ cmd_emergency() {
         rm -f "$BC_PID"
     fi
     set_wanted 0
+    cmd_set TETHER_ENABLED 0 >/dev/null 2>&1
     network_clean "emergency"
     if [ -f "$BC_STATE" ]; then
         sed 's/^state=running/state=cancelled/' "$BC_STATE" > "$BC_STATE.tmp" && mv -f "$BC_STATE.tmp" "$BC_STATE"
@@ -2531,6 +2547,7 @@ case "${1:-}" in
     lists-service) cmd_lists_service "${2:-}" "${3:-}" ;;
     lists-domain)  cmd_lists_domain "${2:-}" "${3:-}" ;;
     network-clean) network_clean "${2:-manual}" ;;
+    tether)        sh "$TETHER" "${2:-status}" ;;
     emergency)     cmd_emergency ;;
     safety-loop)   cmd_safety_loop ;;
     log)           if [ "${2:-}" = clear ]; then cmd_log_clear; else cmd_log "${2:-}"; fi ;;

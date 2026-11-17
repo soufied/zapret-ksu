@@ -83,6 +83,8 @@ fun AppsScreen() {
     var loading by remember { mutableStateOf(true) }
     var mode by remember { mutableStateOf("disabled") }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var quicSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var tab by remember { mutableStateOf(0) }
     var query by remember { mutableStateOf("") }
     var onlyUser by remember { mutableStateOf(true) }
     var msg by remember { mutableStateOf("") }
@@ -94,6 +96,7 @@ fun AppsScreen() {
             val m = d["APP_MODE"].orEmpty()
             mode = if (m.isBlank()) "disabled" else m
             selected = d["APP_LIST"].orEmpty().split(",").filter { it.isNotBlank() }.toSet()
+            quicSelected = d["APP_QUIC_LIST"].orEmpty().split(",").filter { it.isNotBlank() }.toSet()
             apps = ZapretCtl.appsList()
             loading = false
         }
@@ -113,6 +116,8 @@ fun AppsScreen() {
         Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Segmented(options = listOf("Zapret", "QUIC block"), selected = tab) { tab = it }
+        if (tab == 0) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -164,6 +169,45 @@ fun AppsScreen() {
                 }
             }
         }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(18.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    "Apps in the list cannot use QUIC (UDP 443), so they fall back to TCP. Works even when the engine is off.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalButton(
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                        onClick = {
+                            scope.launch {
+                                val r = ZapretCtl.set("APP_QUIC_LIST", quicSelected.joinToString(","))
+                                msg = if (r.ok) {
+                                    val a = ZapretCtl.tetherApply()
+                                    if (a.ok) "Saved" else a.text
+                                } else {
+                                    r.text
+                                }
+                            }
+                        }
+                    ) { Text("Save", maxLines = 1) }
+                    OutlinedButton(
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                        onClick = { reload() }
+                    ) { Text("Reload", maxLines = 1) }
+                    Spacer(Modifier.weight(1f))
+                    if (msg.isNotBlank()) {
+                        Text(msg, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
 
         OutlinedTextField(
             value = query,
@@ -181,7 +225,7 @@ fun AppsScreen() {
                 label = { Text("User apps") }
             )
             Text(
-                "${selected.size} selected",
+                "${(if (tab == 0) selected else quicSelected).size} selected",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -198,9 +242,11 @@ fun AppsScreen() {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(shown, key = { it.pkg + it.uid }) { app ->
-                val checked = app.pkg in selected || app.uid in selected
+                val current = if (tab == 0) selected else quicSelected
+                val checked = app.pkg in current || app.uid in current
                 AppRow(app = app, checked = checked) {
-                    selected = if (checked) selected - app.pkg - app.uid else selected + app.pkg
+                    val next = if (checked) current - app.pkg - app.uid else current + app.pkg
+                    if (tab == 0) selected = next else quicSelected = next
                 }
             }
         }

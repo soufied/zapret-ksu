@@ -2,7 +2,7 @@
 
 A KernelSU module and companion Android app that bypass DPI blocking with zapret. It runs nfqws (zapret 1) and nfqws2 (zapret 2), adds an encrypted DNS proxy, and gives you one screen to control all of it.
 
-**Version 1.3.1** · KernelSU and KernelSU-Next · arm64 · Magisk and APatch untested
+**Version 1.3.2** · KernelSU and KernelSU-Next · arm64 · Magisk and APatch untested
 
 ## Screenshots
 
@@ -21,6 +21,7 @@ A KernelSU module and companion Android app that bypass DPI blocking with zapret
 - **Whitelist check.** Shows whether you are on a whitelist network and whether zapret is helping.
 - **Per-app routing.** Include or exclude individual apps from the bypass.
 - **Host lists.** Toggle services (YouTube, Discord, Instagram, X and more), add custom domains, and edit, import or export any list.
+- **VPN Tethering.** Wi-Fi hotspot and USB clients leave directly or through the VPN tunnel. The VPN kill-switch fails closed: when the tunnel or its rules are gone, client traffic is dropped, never sent with the real IP. Optional hiding (carrier provisioning skipped, client TTL) and QUIC blocking for Google and selected apps.
 - **Encrypted DNS.** A local DoH proxy (dnscrypt-proxy) with redirects for system DNS.
 - **TG WS Proxy.** A local Telegram MTProto proxy, optionally shared on your Wi-Fi.
 - **Auto network profile.** Separate engine, preset and interface for Wi-Fi and mobile data.
@@ -79,6 +80,7 @@ This project stands on the work of others. Thank you to:
 | [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) | zapret 1 strategies |
 | [zapret2-youtube-discord](https://cwdnvtsqdc.zapret.moe/zapretdiscordyoutube/zapret2-youtube-discord) | zapret 2 presets, Lua scripts, lists |
 | [magisk-zapret2](https://cwdnvtsqdc.zapret.moe/zapretdiscordyoutube/magisk-zapret2) | module reference |
+| [vpn-tethering-ultra](https://github.com/JagKubarev/vpn-tethering-ultra) | VPN tethering routing and BPF offload handling |
 | [dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy) | encrypted DNS proxy |
 | [libsu](https://github.com/topjohnwu/libsu) | root shell access in the app |
 | [tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) | TG WS Proxy |

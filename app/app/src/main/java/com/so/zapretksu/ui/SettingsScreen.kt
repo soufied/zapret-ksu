@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wifi
@@ -81,6 +80,7 @@ private class SIface(override val key: String, override val label: String) : SFi
 private class SChoice(override val key: String, override val label: String, val options: List<String>) : SField
 private class SStrategy(override val key: String, override val label: String, val engineKey: String) : SField
 private class SSmartText(override val key: String, override val label: String, val hint: String) : SField
+private class SZapret1(override val key: String, override val label: String) : SField
 
 private class SBoolFor(
     override val key: String,
@@ -94,6 +94,7 @@ private fun fieldVisible(f: SField, draft: Map<String, String>): Boolean =
     when (f) {
         is SBoolFor -> (draft[f.engineKey] ?: "nfqws2") == f.engine
         is SSmartText -> (draft["ENGINE"] ?: "nfqws2") == "nfqws1" && draft["SMART_MODE"] == "1"
+        is SZapret1 -> (draft["ENGINE"] ?: "nfqws2") == "nfqws1"
         else -> true
     }
 
@@ -105,7 +106,8 @@ private val GROUPS: List<Pair<String, List<SField>>> = listOf(
         SStrategy("STRATEGY", "Strategy", "ENGINE"),
         SBoolFor("SMART_MODE", "Smart Mode", "ENGINE", "nfqws1", "Failing domains are added to the smart list automatically"),
         SSmartText("SMART_FAILS", "Failures before adding", "1 to 20 failures"),
-        SSmartText("SMART_WINDOW", "Failure window (seconds)", "Failures must happen within this many seconds")
+        SSmartText("SMART_WINDOW", "Failure window (seconds)", "Failures must happen within this many seconds"),
+        SZapret1("ZAPRET1_OPTIONS", "Zapret 1 options")
     ),
     "Network" to listOf(
         SChoice("BACKEND", "Firewall backend", listOf("auto", "nft", "iptables")),
@@ -150,7 +152,6 @@ private val GROUP_ICONS: Map<String, ImageVector> = mapOf(
     "Network profiles" to Icons.Filled.SwapHoriz
 )
 
-private const val ZAPRET1_TITLE = "Zapret 1 options"
 private const val BACKUP_TITLE = "Backup"
 private const val APPEARANCE_TITLE = "Appearance"
 
@@ -228,12 +229,6 @@ fun SettingsScreen(onOpen: (Route) -> Unit) {
                 }
                 HorizontalDivider()
                 SettingsRow(
-                    Icons.Filled.Science,
-                    ZAPRET1_TITLE,
-                    "IPset mode, fake packets"
-                ) { openPage = ZAPRET1_TITLE }
-                HorizontalDivider()
-                SettingsRow(
                     Icons.Filled.Backup,
                     BACKUP_TITLE,
                     "Save or restore settings, lists and presets"
@@ -258,7 +253,6 @@ fun SettingsScreen(onOpen: (Route) -> Unit) {
 
             when (page) {
                 APPEARANCE_TITLE -> AppearanceEditor()
-                ZAPRET1_TITLE -> AppCard(Modifier.fillMaxWidth()) { Zapret1Options() }
                 BACKUP_TITLE -> AppCard(Modifier.fillMaxWidth()) { BackupSection(onImported = { reload() }) }
                 else -> {
                     val fields = GROUPS.firstOrNull { it.first == page }?.second.orEmpty().filter { fieldVisible(it, draft) }
@@ -441,6 +435,8 @@ private fun FieldEditor(
                 ) { set(f.key, f.options[it]) }
             }
 
+            is SZapret1 -> Zapret1Options()
+
             is SStrategy -> {
                 val eng = draft[f.engineKey] ?: "nfqws2"
                 Text(f.label, style = MaterialTheme.typography.bodyMedium)
@@ -587,7 +583,7 @@ private fun BackupSection(onImported: () -> Unit) {
 }
 
 private fun summaryFor(fields: List<SField>, draft: Map<String, String>): String {
-    val values = fields.filter { it !is SBool }.map { draft[it.key].orEmpty().ifBlank { "-" } }
+    val values = fields.filter { it !is SBool && it !is SZapret1 }.map { draft[it.key].orEmpty().ifBlank { "-" } }
     val bools = fields.filterIsInstance<SBool>()
     val on = bools.count { draft[it.key] == "1" }
     val parts = values + (if (bools.isNotEmpty()) listOf("$on of ${bools.size} on") else emptyList())

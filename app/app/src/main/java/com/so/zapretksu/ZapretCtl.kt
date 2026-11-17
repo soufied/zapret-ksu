@@ -39,6 +39,8 @@ object ZapretCtl {
 
     data class Provider(val id: String, val label: String, val doh: String, val dot: String, val group: String = "Public")
 
+    data class DiagItem(val feature: String, val status: String, val text: String)
+
     data class DnsRow(val id: String, val ms: Int, val ok: Int, val total: Int, val status: String, val pick: Boolean)
 
     data class DnsJob(val state: String, val rows: List<DnsRow>, val message: String)
@@ -370,6 +372,16 @@ object ZapretCtl {
                 if (p.size >= 4) AppEntry(p[0], p[1], p[2], p[3] == "u") else null
             }
         }
+    }
+
+    suspend fun tetherStatus(): Map<String, String> = kv(run("tether", "status").lines)
+    suspend fun tetherApply(): Result = run("tether", "apply")
+    suspend fun tetherYoutubeRefresh(): Result = run("tether", "youtube-refresh")
+    suspend fun tetherInterfaces(): List<String> = nonBlank(run("tether", "interfaces").lines)
+
+    suspend fun tetherDiagnose(): List<DiagItem> = run("tether", "diagnose").lines.mapNotNull { line ->
+        val p = line.split("|", limit = 3)
+        if (p.size == 3) DiagItem(p[0], p[1], p[2]) else null
     }
 
     suspend fun ipsetGet(): String = run("ipset", "get").lines.firstOrNull()?.trim().orEmpty()
